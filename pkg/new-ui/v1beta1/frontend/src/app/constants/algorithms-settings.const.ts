@@ -89,7 +89,15 @@ export const CMAESSettings: AlgorithmSetting[] = [
     value: 0.001,
     type: AlgorithmSettingType.FLOAT,
   },
+  {
+    name: 'restart_strategy',
+    value: 'none',
+    values: ['none', 'ipop', 'bipop'],
+    type: AlgorithmSettingType.STRING,
+  },
 ];
+
+export const SOBOLSettings: AlgorithmSetting[] = [];
 
 export const ENASSettings: AlgorithmSetting[] = [
   {
@@ -242,6 +250,7 @@ export const AlgorithmSettingsMap: { [key: string]: AlgorithmSetting[] } = {
   [AlgorithmsEnum.BAYESIAN_OPTIMIZATION]: BayesianOptimizationSettings,
   [AlgorithmsEnum.TPE]: TPESettings,
   [AlgorithmsEnum.CMAES]: CMAESSettings,
+  [AlgorithmsEnum.SOBOL]: SOBOLSettings,
   [AlgorithmsEnum.ENAS]: ENASSettings,
   [AlgorithmsEnum.DARTS]: DartsSettings,
 };

@@ -2,7 +2,7 @@ apiVersion: "kubeflow.org/v1beta1"
 kind: Experiment
 metadata:
   namespace: kubeflow
-  name: cmaes-example
+  name: sobol-example
 spec:
   objective:
     type: maximize
@@ -11,10 +11,7 @@ spec:
     additionalMetricNames:
       - Train-accuracy
   algorithm:
-    algorithmName: cmaes
-    algorithmSettings:
-      - name: "restart_strategy"
-        value: "ipop"
+    algorithmName: sobol
   parallelTrialCount: 3
   maxTrialCount: 12
   maxFailedTrialCount: 3
