@@ -1,4 +1,4 @@
-# Copyright 2021 The Kubeflow Authors.
+# Copyright 2022 The Kubeflow Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,45 +12,84 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import tensorflow as tf
+# TFEventFileParser parses tfevent files and returns an ObservationLog of the metrics specified.
+# When the event file is under a directory(e.g. test dir), please specify
+# "{{dirname}}/{{metrics name}}"
+# For example, in the Tensorflow MNIST Classification With Summaries:
+# https://github.com/kubeflow/katib/blob/master/examples/v1beta1/trial-images/tf-mnist-with-summaries/mnist.py.
+# The "accuracy" and "loss" metric is saved under "train" and "test" directories.
+# So in the Metrics Collector specification, please specify name of "train" or "test" directory.
+# Check TFJob example for more information:
+# https://github.com/kubeflow/katib/blob/master/examples/v1beta1/kubeflow-training-operator/tfjob-mnist-with-summaries.yaml#L16-L22
+
 import os
 from datetime import datetime
-import rfc3339
-import api_pb2
-from logging import getLogger, StreamHandler, INFO
-import const
+from logging import INFO, StreamHandler, getLogger
 
-# TFEventFileParser parses tfevent files and returns an ObservationLog of the metrics specified.
-# When the event file is under a directory(e.g. test dir), please specify "{{dirname}}/{{metrics name}}"
-# For example, in the kubeflow tf-operator tutorial for mnist with summary (https://github.com/kubeflow/tf-operator/blob/master/examples/v1/mnist_with_summaries/mnist_with_summaries.py),
-# the "accuracy" metric is saved under "train" and "test" directories. So in the Metrics Collector specification, please specify name of "train" or "test" directory. Check TFJob example for more information: https://github.com/kubeflow/katib/blob/master/examples/v1beta1/tfjob-example.yaml#L16-L22
+import api_pb2
+import rfc3339
+import tensorflow as tf
+from tensorboard.backend.event_processing.event_accumulator import EventAccumulator
+from tensorboard.backend.event_processing.tag_types import SCALARS, TENSORS
+
+from pkg.metricscollector.v1beta1.common import const
+
+
+def _should_consider(tag: str, metric_name: str, tfefile: str) -> bool:
+    tfefile_parent_dir = (
+        os.path.dirname(metric_name)
+        if len(metric_name.split("/")) >= 2
+        else os.path.dirname(tfefile)
+    )
+    basedir_name = os.path.dirname(tfefile)
+    return tag.startswith(metric_name.split("/")[-1]) and basedir_name.endswith(
+        tfefile_parent_dir
+    )
 
 
 class TFEventFileParser:
-    def find_all_files(self, directory):
+    def __init__(self, metric_names):
+        self.metric_names = metric_names
+
+    @staticmethod
+    def find_all_files(directory):
         for root, dirs, files in os.walk(directory):
-            yield root
             for f in files:
                 yield os.path.join(root, f)
 
-    def parse_summary(self, tfefile, metrics):
+    def parse_summary(self, tfefile):
         metric_logs = []
-        for summary in tf.train.summary_iterator(tfefile):
-            paths = tfefile.split("/")
-            for v in summary.summary.value:
-                for m in metrics:
-                    tag = str(v.tag)
-                    if len(paths) >= 2 and len(m.split("/")) >= 2:
-                        tag = str(paths[-2]+"/" + v.tag)
-                    if tag.startswith(m):
+        event_accumulator = EventAccumulator(
+            tfefile, size_guidance={SCALARS: 0, TENSORS: 0}
+        )
+        event_accumulator.Reload()
+        tags = event_accumulator.Tags()
+        for tag in tags[TENSORS]:
+            for m in self.metric_names:
+                if _should_consider(tag, m, tfefile):
+                    for tensor in event_accumulator.Tensors(tag):
                         ml = api_pb2.MetricLog(
-                            time_stamp=rfc3339.rfc3339(datetime.fromtimestamp(summary.wall_time)),
+                            time_stamp=rfc3339.rfc3339(
+                                datetime.fromtimestamp(tensor.wall_time)
+                            ),
                             metric=api_pb2.Metric(
-                                name=m,
-                                value=str(v.simple_value)
-                            )
+                                name=m, value=str(tf.make_ndarray(tensor.tensor_proto))
+                            ),
                         )
                         metric_logs.append(ml)
+        # support old-style tensorboard metrics too
+        for tag in tags[SCALARS]:
+            for m in self.metric_names:
+                if _should_consider(tag, m, tfefile):
+                    for scalar in event_accumulator.Scalars(tag):
+                        ml = api_pb2.MetricLog(
+                            time_stamp=rfc3339.rfc3339(
+                                datetime.fromtimestamp(scalar.wall_time)
+                            ),
+                            metric=api_pb2.Metric(name=m, value=str(scalar.value)),
+                        )
+                        metric_logs.append(ml)
+
         return metric_logs
 
 
@@ -63,7 +102,7 @@ class MetricsCollector:
         self.logger.addHandler(handler)
         self.logger.propagate = False
         self.metrics = metric_names
-        self.parser = TFEventFileParser()
+        self.parser = TFEventFileParser(self.metrics)
 
     def parse_file(self, directory):
         mls = []
@@ -72,7 +111,7 @@ class MetricsCollector:
                 continue
             try:
                 self.logger.info(f + " will be parsed.")
-                mls.extend(self.parser.parse_summary(f, self.metrics))
+                mls.extend(self.parser.parse_summary(f))
             except Exception as e:
                 self.logger.warning("Unexpected error: " + str(e))
                 continue
@@ -90,12 +129,14 @@ class MetricsCollector:
                 api_pb2.MetricLog(
                     time_stamp=rfc3339.rfc3339(datetime.now()),
                     metric=api_pb2.Metric(
-                        name=self.metrics[0],
-                        value=const.UNAVAILABLE_METRIC_VALUE
-                    )
+                        name=self.metrics[0], value=const.UNAVAILABLE_METRIC_VALUE
+                    ),
                 )
             ]
-            self.logger.info("Objective metric {} is not found in training logs, {} value is reported".format(
-                self.metrics[0], const.UNAVAILABLE_METRIC_VALUE))
+            self.logger.info(
+                "Objective metric {} is not found in training logs, {} value is reported".format(
+                    self.metrics[0], const.UNAVAILABLE_METRIC_VALUE
+                )
+            )
 
         return api_pb2.ObservationLog(metric_logs=mls)

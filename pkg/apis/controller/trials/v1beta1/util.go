@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package v1beta1
 
 import (
 	"errors"
+	"github.com/kubeflow/katib/pkg/controller.v1beta1/consts"
 
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -86,15 +87,27 @@ func (trial *Trial) IsKilled() bool {
 
 // IsMetricsUnavailable returns true if Trial metrics are not available
 func (trial *Trial) IsMetricsUnavailable() bool {
-	cond := getCondition(trial, TrialSucceeded)
-	if cond != nil && cond.Status == v1.ConditionFalse {
-		return true
+	return hasCondition(trial, TrialMetricsUnavailable)
+}
+
+// IsObservationAvailable return ture if the Trial has valid observations updated
+func (trial *Trial) IsObservationAvailable() bool {
+	if trial.Spec.Objective == nil {
+		return false
+	}
+	objectiveMetricName := trial.Spec.Objective.ObjectiveMetricName
+	if trial.Status.Observation != nil && trial.Status.Observation.Metrics != nil {
+		for _, metric := range trial.Status.Observation.Metrics {
+			if metric.Name == objectiveMetricName && metric.Latest != consts.UnavailableMetricValue {
+				return true
+			}
+		}
 	}
 	return false
 }
 
 func (trial *Trial) IsCompleted() bool {
-	return trial.IsSucceeded() || trial.IsFailed() || trial.IsKilled() || trial.IsEarlyStopped()
+	return trial.IsSucceeded() || trial.IsFailed() || trial.IsKilled() || trial.IsEarlyStopped() || trial.IsMetricsUnavailable()
 }
 
 func (trial *Trial) IsEarlyStopped() bool {
@@ -157,4 +170,12 @@ func (trial *Trial) MarkTrialStatusKilled(reason, message string) {
 		trial.setCondition(TrialRunning, v1.ConditionFalse, currentCond.Reason, currentCond.Message)
 	}
 	trial.setCondition(TrialKilled, v1.ConditionTrue, reason, message)
+}
+
+func (trial *Trial) MarkTrialStatusMetricsUnavailable(reason, message string) {
+	currentCond := getCondition(trial, TrialRunning)
+	if currentCond != nil {
+		trial.setCondition(TrialRunning, v1.ConditionFalse, currentCond.Reason, currentCond.Message)
+	}
+	trial.setCondition(TrialMetricsUnavailable, v1.ConditionTrue, reason, message)
 }

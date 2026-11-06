@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,6 +27,7 @@ import (
 	"github.com/kubeflow/katib/pkg/controller.v1beta1/consts"
 
 	gographviz "github.com/awalterschulze/gographviz"
+	trialv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/trials/v1beta1"
 	apiv1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -46,16 +47,17 @@ func (k *KatibUIHandler) getExperiments(namespace []string) ([]ExperimentView, e
 			log.Printf("GetLastConditionType failed: %v", err)
 			return nil, err
 		}
-		newExperiment := ExperimentView{
-			Name:      experiment.Name,
-			Namespace: experiment.Namespace,
-			Status:    string(experimentLastCondition),
+		tp := ExperimentTypeHP
+		if experiment.Spec.NasConfig != nil {
+			tp = ExperimentTypeNAS
 		}
 
-		if experiment.Spec.NasConfig == nil {
-			newExperiment.Type = ExperimentTypeHP
-		} else {
-			newExperiment.Type = ExperimentTypeNAS
+		newExperiment := ExperimentView{
+			experiment.Name,
+			experiment.Namespace,
+			tp,
+			string(experimentLastCondition),
+			experiment.Status,
 		}
 
 		experiments = append(experiments, newExperiment)
@@ -64,16 +66,18 @@ func (k *KatibUIHandler) getExperiments(namespace []string) ([]ExperimentView, e
 	return experiments, nil
 }
 
-func enableCors(w *http.ResponseWriter) {
-	(*w).Header().Set("Content-Type", "text/html; charset=utf-8")
-	(*w).Header().Set("Access-Control-Allow-Origin", "*")
-	(*w).Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE")
-	(*w).Header().Set("Access-Control-Allow-Headers", allowedHeaders)
-	(*w).Header().Set("Access-Control-Expose-Headers", "Access-Control-*")
-	(*w).Header().Set("Access-Control-Allow-Credentials", "true")
+func havePipelineUID(trials []trialv1beta1.Trial) bool {
+	for _, t := range trials {
+		_, ok := t.GetAnnotations()[kfpRunIDAnnotation]
+		if ok {
+			return true
+		}
+	}
+
+	return false
 }
 
-func (k *KatibUIHandler) getTrialTemplatesViewList() ([]TrialTemplatesDataView, error) {
+func (k *KatibUIHandler) getTrialTemplatesViewList(r *http.Request) ([]TrialTemplatesDataView, error) {
 	trialTemplatesDataView := make([]TrialTemplatesDataView, 0)
 
 	// Get all available namespaces
@@ -91,8 +95,31 @@ func (k *KatibUIHandler) getTrialTemplatesViewList() ([]TrialTemplatesDataView, 
 			return nil, err
 		}
 
+		// Iterate over the trialTemplatesConfigMapList from all namespaces and filter out the
+		// configmaps that belong to namespaces other than kubeflow and the ones that the user has
+		// access privileges.
+		var newTrialTemplatesConfigMapList []apiv1.ConfigMap
+		for _, cmap := range trialTemplatesConfigMapList.Items {
+			if ns == consts.DefaultKatibNamespace {
+				// Add the configmaps from kubeflow namespace (no user can have access to kubeflow ns, so we hardcode it)
+				newTrialTemplatesConfigMapList = append(newTrialTemplatesConfigMapList, cmap)
+			} else {
+				// for all other namespaces check authorization rbac
+				configmapName := cmap.ObjectMeta.Name
+				user, err := IsAuthorized(consts.ActionTypeGet, ns, apiv1.ResourceConfigMaps.String(), "", configmapName, apiv1.SchemeGroupVersion, k.katibClient.GetClient(), r)
+				if err != nil {
+					log.Printf("The user: %s is not authorized to view configMap: %s in namespace: %s \n", user, configmapName, ns)
+					return nil, err
+				} else {
+					log.Printf("The user: %s is authorized to view configMap: %s in namespace: %s", user, configmapName, ns)
+					newTrialTemplatesConfigMapList = append(newTrialTemplatesConfigMapList, cmap)
+				}
+			}
+
+		}
+
 		if len(trialTemplatesConfigMapList.Items) != 0 {
-			newTrialTemplatesView := getTrialTemplatesView(trialTemplatesConfigMapList)
+			newTrialTemplatesView := getTrialTemplatesView(newTrialTemplatesConfigMapList)
 			// ConfigMap with templates must exists in namespace
 			if len(newTrialTemplatesView.ConfigMaps) > 0 {
 				trialTemplatesDataView = append(trialTemplatesDataView, newTrialTemplatesView)
@@ -117,13 +144,13 @@ func (k *KatibUIHandler) getAvailableNamespaces() ([]string, error) {
 	return namespaces, nil
 }
 
-func getTrialTemplatesView(templatesConfigMapList *apiv1.ConfigMapList) TrialTemplatesDataView {
+func getTrialTemplatesView(templatesConfigMapList []apiv1.ConfigMap) TrialTemplatesDataView {
 
 	trialTemplatesDataView := TrialTemplatesDataView{
-		ConfigMapNamespace: templatesConfigMapList.Items[0].ObjectMeta.Namespace,
+		ConfigMapNamespace: templatesConfigMapList[0].ObjectMeta.Namespace,
 		ConfigMaps:         []ConfigMap{},
 	}
-	for _, configMap := range templatesConfigMapList.Items {
+	for _, configMap := range templatesConfigMapList {
 		newConfigMap := ConfigMap{
 			ConfigMapName: configMap.ObjectMeta.Name,
 			Templates:     []Template{},
@@ -156,7 +183,8 @@ func (k *KatibUIHandler) updateTrialTemplates(
 	configMapPath,
 	updatedConfigMapPath,
 	updatedTemplateYaml,
-	actionType string) ([]TrialTemplatesDataView, error) {
+	actionType string,
+	r *http.Request) ([]TrialTemplatesDataView, error) {
 
 	templates, err := k.katibClient.GetConfigMap(updatedConfigMapName, updatedConfigMapNamespace)
 	if err != nil && !(errors.IsNotFound(err) && actionType == ActionTypeAdd) {
@@ -210,7 +238,7 @@ func (k *KatibUIHandler) updateTrialTemplates(
 		}
 	}
 
-	newTemplates, err := k.getTrialTemplatesViewList()
+	newTemplates, err := k.getTrialTemplatesViewList(r)
 	if err != nil {
 		log.Printf("getTrialTemplatesViewList: %v", err)
 		return nil, err
@@ -252,7 +280,7 @@ func generateNNImage(architecture string, decoder string) string {
 		Embeding is a map: int to Parameter
 		Parameter has id, type, Option
 
-		Beforehand substite all ' to " and wrap the string in `
+		Beforehand substitute all ' to " and wrap the string in `
 	*/
 
 	replacedDecoder := strings.Replace(decoder, `'`, `"`, -1)
@@ -268,23 +296,43 @@ func generateNNImage(architecture string, decoder string) string {
 	if err := gographviz.Analyse(graphAst, graph); err != nil {
 		panic(err)
 	}
-	graph.AddNode("G", "0", map[string]string{"label": strconv.Quote("Input")})
+	if err = graph.AddNode("G", "0", map[string]string{"label": strconv.Quote("Input")}); err != nil {
+		panic(err)
+	}
 	var i int
 	for i = 0; i < len(architectureInt); i++ {
-		graph.AddNode("G", strconv.Itoa(i+1), map[string]string{"label": getNodeString(decoderParsed.Embedding[architectureInt[i][0]])})
-		graph.AddEdge(strconv.Itoa(i), strconv.Itoa(i+1), true, nil)
+		if err = graph.AddNode("G", strconv.Itoa(i+1), map[string]string{"label": getNodeString(decoderParsed.Embedding[architectureInt[i][0]])}); err != nil {
+			panic(err)
+		}
+		if err = graph.AddEdge(strconv.Itoa(i), strconv.Itoa(i+1), true, nil); err != nil {
+			panic(err)
+		}
 		for j := 1; j < i+1; j++ {
 			if architectureInt[i][j] == 1 {
-				graph.AddEdge(strconv.Itoa(j-1), strconv.Itoa(i+1), true, nil)
+				if err = graph.AddEdge(strconv.Itoa(j-1), strconv.Itoa(i+1), true, nil); err != nil {
+					panic(err)
+				}
 			}
 		}
 	}
-	graph.AddNode("G", strconv.Itoa(i+1), map[string]string{"label": strconv.Quote("GlobalAvgPool")})
-	graph.AddEdge(strconv.Itoa(i), strconv.Itoa(i+1), true, nil)
-	graph.AddNode("G", strconv.Itoa(i+2), map[string]string{"label": strconv.Quote("FullConnect\nSoftmax")})
-	graph.AddEdge(strconv.Itoa(i+1), strconv.Itoa(i+2), true, nil)
-	graph.AddNode("G", strconv.Itoa(i+3), map[string]string{"label": strconv.Quote("Output")})
-	graph.AddEdge(strconv.Itoa(i+2), strconv.Itoa(i+3), true, nil)
+	if err = graph.AddNode("G", strconv.Itoa(i+1), map[string]string{"label": strconv.Quote("GlobalAvgPool")}); err != nil {
+		panic(err)
+	}
+	if err = graph.AddEdge(strconv.Itoa(i), strconv.Itoa(i+1), true, nil); err != nil {
+		panic(err)
+	}
+	if err = graph.AddNode("G", strconv.Itoa(i+2), map[string]string{"label": strconv.Quote("FullConnect\nSoftmax")}); err != nil {
+		panic(err)
+	}
+	if err = graph.AddEdge(strconv.Itoa(i+1), strconv.Itoa(i+2), true, nil); err != nil {
+		panic(err)
+	}
+	if err = graph.AddNode("G", strconv.Itoa(i+3), map[string]string{"label": strconv.Quote("Output")}); err != nil {
+		panic(err)
+	}
+	if err = graph.AddEdge(strconv.Itoa(i+2), strconv.Itoa(i+3), true, nil); err != nil {
+		panic(err)
+	}
 	s := graph.String()
 	return s
 }

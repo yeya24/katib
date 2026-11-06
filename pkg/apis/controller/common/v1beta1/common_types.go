@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -27,6 +27,8 @@ type AlgorithmSpec struct {
 	AlgorithmName string `json:"algorithmName,omitempty"`
 
 	// Key-value pairs representing settings for suggestion algorithms.
+	// +listType=map
+	// +listMapKey=name
 	AlgorithmSettings []AlgorithmSetting `json:"algorithmSettings,omitempty"`
 }
 
@@ -46,6 +48,8 @@ type EarlyStoppingSpec struct {
 	AlgorithmName string `json:"algorithmName,omitempty"`
 
 	// Key-value pairs representing settings for early stopping algorithm.
+	// +listType=map
+	// +listMapKey=name
 	AlgorithmSettings []EarlyStoppingSetting `json:"algorithmSettings,omitempty"`
 }
 
@@ -105,10 +109,13 @@ type ObjectiveSpec struct {
 	// AdditionalMetricNames represents metrics that should be collected from Trials.
 	// This can be empty if we only care about the objective metric.
 	// Note: If we adopt a push instead of pull mechanism, this can be omitted completely.
+	// +listType=set
 	AdditionalMetricNames []string `json:"additionalMetricNames,omitempty"`
 
 	// MetricStrategies defines various rules (min, max or latest) to extract metrics values.
 	// This field is allowed to missing, experiment defaulter (webhook) will fill it.
+	// +listType=map
+	// +listMapKey=name
 	MetricStrategies []MetricStrategy `json:"metricStrategies,omitempty"`
 }
 
@@ -150,7 +157,9 @@ type Metric struct {
 // +k8s:deepcopy-gen=true
 type Observation struct {
 	// Key-value pairs for metric names and values
-	Metrics []Metric `json:"metrics"`
+	// +listType=map
+	// +listMapKey=name
+	Metrics []Metric `json:"metrics,omitempty"`
 }
 
 // +k8s:deepcopy-gen=true
@@ -177,6 +186,7 @@ type SourceSpec struct {
 type FilterSpec struct {
 	// When the metrics output follows format as this field specified, metricsCollector
 	// collects it and reports to metrics server, it can be "<metric_name>: <float>" or else
+	// +listType=set
 	MetricsFormat []string `json:"metricsFormat,omitempty"`
 }
 
@@ -188,10 +198,18 @@ const (
 	InvalidKind   FileSystemKind = "Invalid"
 )
 
+type FileFormat string
+
+const (
+	TextFormat FileFormat = "TEXT"
+	JsonFormat FileFormat = "JSON"
+)
+
 // +k8s:deepcopy-gen=true
 type FileSystemPath struct {
-	Path string         `json:"path,omitempty"`
-	Kind FileSystemKind `json:"kind,omitempty"`
+	Path   string         `json:"path,omitempty"`
+	Kind   FileSystemKind `json:"kind,omitempty"`
+	Format FileFormat     `json:"format,omitempty"`
 }
 
 type CollectorKind string
@@ -200,27 +218,27 @@ const (
 	StdOutCollector CollectorKind = "StdOut"
 
 	FileCollector   CollectorKind = "File"
-	DefaultFilePath               = "/var/log/katib/metrics.log"
+	DefaultFilePath string        = "/var/log/katib/metrics.log"
 
 	TfEventCollector              CollectorKind = "TensorFlowEvent"
-	DefaultTensorflowEventDirPath               = "/var/log/katib/tfevent/"
+	DefaultTensorflowEventDirPath string        = "/var/log/katib/tfevent/"
 
 	PrometheusMetricCollector CollectorKind = "PrometheusMetric"
-	DefaultPrometheusPath                   = "/metrics"
-	DefaultPrometheusPort                   = 8080
+	DefaultPrometheusPath     string        = "/metrics"
+	DefaultPrometheusPort     int           = 8080
 
 	CustomCollector CollectorKind = "Custom"
 
 	// When model training source code persists metrics into persistent layer
-	// directly, metricsCollector isn't in need, and its kind is "noneCollector"
-	NoneCollector CollectorKind = "None"
+	// directly, sidecar container isn't in need, and its kind is "pushCollector"
+	PushCollector CollectorKind = "Push"
 
 	MetricsVolume = "metrics-volume"
 )
 
 // +k8s:deepcopy-gen=true
 type CollectorSpec struct {
-	Kind CollectorKind `json:"kind"`
+	Kind CollectorKind `json:"kind,omitempty"`
 	// When kind is "customCollector", this field will be used
 	CustomCollector *v1.Container `json:"customCollector,omitempty"`
 }

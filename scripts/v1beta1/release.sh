@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Copyright 2021 The Kubeflow Authors.
+# Copyright 2022 The Kubeflow Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,7 +16,8 @@
 
 # This script is used to release Katib project.
 # Run ./scripts/v1beta1/release.sh <BRANCH> <TAG> to execute it.
-# For example: ./scripts/v1beta1/release.sh release-0.11 v0.11.1
+# For example: ./scripts/v1beta1/release.sh release-0.11 v0.11.1 or
+# ./scripts/v1beta1/release.sh release-0.11 v0.11.0-rc.0
 # You must follow this format, Branch: release-X.Y, Tag: vX.Y.Z.
 
 set -e
@@ -27,25 +28,25 @@ TAG=$2
 if [[ -z "$BRANCH" || -z "$TAG" ]]; then
   echo "Branch and Tag must be set"
   echo "Usage: $0 <BRANCH> <TAG>" 1>&2
-  echo "You must follow this format, Branch: release-X.Y, Tag: vX.Y.Z"
+  echo "You must follow this format, Branch: release-X.Y, Tag: vX.Y.Z or Tag: vX.Y.Z-rc.N"
   exit 1
 fi
 
 # Check that Branch and Tag is in correct format.
-if [[ ! "$BRANCH" =~ release-[0-9]+\.[0-9]+ || ! "$TAG" =~ v[0-9]+\.[0-9]+\.[0-9]+ ]]; then
+if [[ ! "$BRANCH" =~ release-[0-9]+\.[0-9]+ || ! "$TAG" =~ v[0-9]+\.[0-9]+\.([0-9]+$|[0-9]+-rc\.[0-9]+$) ]]; then
   echo "Branch or Tag format is invalid"
   echo "Usage: $0 <BRANCH> <TAG>" 1>&2
-  echo "You must follow this format, Branch: release-X.Y, Tag: vX.Y.Z"
+  echo "You must follow this format, Branch: release-X.Y, Tag: vX.Y.Z or Tag: vX.Y.Z-rc.N"
   exit 1
 fi
 
 # Clone Katib repo to the temp dir.
 temp_dir=$(mktemp -d)
-git clone "git@github.com:kubeflow/katib.git" ${temp_dir}
-cd $temp_dir
+git clone "git@github.com:kubeflow/katib.git" "${temp_dir}"
+cd "$temp_dir"
 
 # Check if tag exists.
-if [[ ! -z $(git tag --list ${TAG}) ]]; then
+if [[ -n $(git tag --list "${TAG}") ]]; then
   echo "Tag: ${TAG} exists. Release can't be published"
   exit 1
 fi
@@ -53,13 +54,13 @@ fi
 echo -e "\nCreating a new release. Branch: ${BRANCH}, Tag: ${TAG}\n"
 
 # Create or use the branch.
-if [[ -z $(git branch -r -l origin/${BRANCH}) ]]; then
+if [[ -z $(git branch -r -l "origin/${BRANCH}") ]]; then
   echo "Branch: ${BRANCH} does not exist. Creating a new minor release"
-  git checkout -b ${BRANCH}
+  git checkout -b "${BRANCH}"
 else
   echo "Branch: ${BRANCH} exists. Creating a new patch release"
-  git checkout ${BRANCH}
-  read -p "Did you cherry pick all commits from the master to the ${BRANCH} branch? [y|n] "
+  git checkout "${BRANCH}"
+  read -rp "Did you cherry pick all commits from the master to the ${BRANCH} branch? [y|n] "
   if [ "$REPLY" != "y" ]; then
     exit 1
   fi
@@ -67,38 +68,24 @@ fi
 
 # ------------------ Change image tag ------------------
 # Change Katib image tags to the new release tag.
-echo -e "\nUpdating Katib image tags to ${TAG}\n"
-# For MacOS we should set -i '' to avoid temp files from sed.
-if [[ $(uname) == "Darwin" ]]; then
-  sed -i '' -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-external-db/kustomization.yaml
-  sed -i '' -e "s@:[^[:space:]].*\"@:${TAG}\"@" ./manifests/v1beta1/components/controller/katib-config.yaml
-  sed -i '' -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-standalone/kustomization.yaml
-  sed -i '' -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-with-kubeflow/kustomization.yaml
-  sed -i '' -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-cert-manager/kustomization.yaml
-  sed -i '' -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-openshift/kustomization.yaml
-else
-  sed -i -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-external-db/kustomization.yaml
-  sed -i -e "s@:[^[:space:]].*\"@:${TAG}\"@" ./manifests/v1beta1/components/controller/katib-config.yaml
-  sed -i -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-standalone/kustomization.yaml
-  sed -i -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-with-kubeflow/kustomization.yaml
-  sed -i -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-cert-manager/kustomization.yaml
-  sed -i -e "s@newTag: .*@newTag: ${TAG}@" ./manifests/v1beta1/installs/katib-openshift/kustomization.yaml
-fi
-echo -e "Katib images have been updated\n"
+make update-images OLD_PREFIX="ghcr.io/kubeflow/katib/" NEW_PREFIX="ghcr.io/kubeflow/katib/" TAG="${TAG}"
 
 # ------------------ Publish Katib SDK ------------------
-# Remove first "v" from the Katib release version for the SDK version.
+# Remove first "v" for the SDK version.
 sdk_version=${TAG:1}
-echo -e "Publishing Katib Python SDK, version: ${sdk_version}\n"
-# Run generate script.
-make generate
+# Check if this is pre-release.
+if [[ ${sdk_version} == *"-rc."* ]]; then
+  # Replace "-rc." with "rc" for the SDK version.
+  sdk_version=${sdk_version//-rc./rc}
+fi
+echo -e "\nPublishing Katib Python SDK, version: ${sdk_version}\n"
 
 # Change version in setup.py
 cd sdk/python/v1beta1
 if [[ $(uname) == "Darwin" ]]; then
-  sed -i '' -e "s@version='.*'@version='${sdk_version}'@" setup.py
+  sed -i '' -e "s@version=\".*\"@version=\"${sdk_version}\"@" setup.py
 else
-  sed -i -e "s@version='.*'@version='${sdk_version}'@" setup.py
+  sed -i -e "s@version=\".*\"@version=\"${sdk_version}\"@" setup.py
 fi
 # Generate SDK and upload new version to PyPi.
 python3 setup.py sdist bdist_wheel
@@ -107,24 +94,45 @@ rm -r dist/ build/
 cd ../../..
 echo -e "\nKatib Python SDK ${sdk_version} has been published\n"
 
+# ------------------ Publish Katib Models for Kubeflow SDK ------------------
+echo -e "\nPublishing Katib Python models for Kubeflow SDK, version: ${sdk_version}\n"
+
+# Change version in gen-api.sh file.
+if [[ $(uname) == "Darwin" ]]; then
+  sed -i '' -e "s@API_VERSION=\".*\"@API_VERSION=\"${sdk_version}\"@" hack/python-api/gen-api.sh
+else
+  sed -i -e "s@API_VERSION=\".*\"@API_VERSION=\"${sdk_version}\"@" hack/python-api/gen-api.sh
+fi
+./hack/python-api/gen-api.sh
+
+# Upload Katib models to PyPI.
+cd api/python_api
+python -m build
+twine upload dist/*
+rm -r dist/
+cd ../..
+echo -e "\nKatib Python API models for Kubeflow SDK have been published"
+
+
 # ------------------ Commit changes ------------------
 git commit -a -m "Katib official release ${TAG}"
 # Create a new tag.
-git tag ${TAG}
+git tag "${TAG}"
 
 # ------------------ Publish Katib images ------------------
 # Publish images to the registry with 2 tags: ${TAG} and v1beta1-<commit-sha>
 echo -e "\nPublishing Katib images\n"
-make push-tag TAG=${TAG}
+make push-tag TAG="${TAG}"
 echo -e "Katib images have been published\n"
 
 # ------------------ Push to upstream ------------------
-read -p "Do you want to push Katib ${TAG} version to the upstream? [y|n] "
+read -rp "Do you want to push Katib ${TAG} version to the upstream? [y|n] "
 if [ "$REPLY" != "y" ]; then
   exit 1
 fi
 # Push a new Branch and Tag.
-git push -u origin ${BRANCH}
-git push -u origin ${TAG}
+git push -u origin "${BRANCH}"
+git push -u origin "${TAG}"
 
-echo -e "\nKatib ${TAG} has been released"
+echo -e "\nKatib ${TAG} release has been published"
+echo "To finish the release process, follow these steps: https://github.com/kubeflow/katib/tree/master/docs/release#create-a-new-katib-release"

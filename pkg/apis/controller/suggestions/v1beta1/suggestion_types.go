@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,7 +28,7 @@ import (
 // SuggestionSpec is the specification of a Suggestion.
 type SuggestionSpec struct {
 	// Algorithm describes HP or NAS algorithm that suggestion is used.
-	Algorithm *common.AlgorithmSpec `json:"algorithm"`
+	Algorithm *common.AlgorithmSpec `json:"algorithm,omitempty"`
 
 	// EarlyStopping describes early stopping algorithm that suggestion is used.
 	EarlyStopping *common.EarlyStoppingSpec `json:"earlyStopping,omitempty"`
@@ -37,7 +37,7 @@ type SuggestionSpec struct {
 	Requests int32 `json:"requests,omitempty"`
 
 	// ResumePolicy describes resuming policy which usually take effect after experiment terminated.
-	// Default value is LongRunning.
+	// Default value is Never.
 	ResumePolicy experiment.ResumePolicyType `json:"resumePolicy,omitempty"`
 }
 
@@ -46,12 +46,16 @@ type SuggestionStatus struct {
 	// AlgorithmSettings defines HP or NAS algorithm settings which suggestion gRPC service returns.
 	// These settings overwrites Experiment's settings before the gRPC request.
 	// It can be empty if settings haven't been changed.
+	// +listType=map
+	// +listMapKey=name
 	AlgorithmSettings []common.AlgorithmSetting `json:"algorithmSettings,omitempty"`
 
 	// Number of suggestion results
 	SuggestionCount int32 `json:"suggestionCount,omitempty"`
 
 	// Suggestion results
+	// +listType=map
+	// +listMapKey=name
 	Suggestions []TrialAssignment `json:"suggestions,omitempty"`
 
 	// Represents time when the Suggestion was acknowledged by the Suggestion controller.
@@ -70,20 +74,29 @@ type SuggestionStatus struct {
 	LastReconcileTime *metav1.Time `json:"lastReconcileTime,omitempty"`
 
 	// List of observed runtime conditions for this Suggestion.
+	// +listType=map
+	// +listMapKey=type
 	Conditions []SuggestionCondition `json:"conditions,omitempty"`
 }
 
 // TrialAssignment is the assignment for one trial.
 type TrialAssignment struct {
 	// Suggestion results with Trial parameters
+	// +listType=map
+	// +listMapKey=name
 	ParameterAssignments []common.ParameterAssignment `json:"parameterAssignments,omitempty"`
 
-	//Name of the suggestion
+	// Name of the suggestion
 	Name string `json:"name,omitempty"`
 
 	// Rules for early stopping techniques
 	// Contains rule name, value and comparison type
+	// +listType=map
+	// +listMapKey=name
 	EarlyStoppingRules []common.EarlyStoppingRule `json:"earlyStoppingRules,omitempty"`
+
+	// Suggestion label metadata to attach to Trial job
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // SuggestionCondition describes the state of the Suggestion at a certain point.

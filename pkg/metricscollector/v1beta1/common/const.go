@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -39,8 +39,14 @@ const (
 	// DefaultFilter is the default metrics collector filter to parse the metrics.
 	// Metrics must be printed this way
 	// loss=0.3
-	// accuracy=0.98
-	DefaultFilter = `([\w|-]+)\s*=\s*((-?\d+)(\.\d+)?)`
+	// accuracy=.98
+	// Score=-7.53e-05
+	// Score=-7.53e+05
+	// Score=1E0
+	// Score=1.23E10
+	DefaultFilter = `([\w|-]+)\s*=\s*([+-]?\d*(\.\d+)?([Ee][+-]?\d+)?)`
+
+	TimeStampJsonKey = "timestamp"
 
 	// TODO (andreyvelich): Do we need to maintain 2 names? Should we leave only 1?
 	MetricCollectorContainerName       = "metrics-collector"
@@ -48,7 +54,7 @@ const (
 )
 
 var (
-	AutoInjectMetricsCollecterList = [...]v1beta1common.CollectorKind{
+	AutoInjectMetricsCollectorList = [...]v1beta1common.CollectorKind{
 		v1beta1common.StdOutCollector,
 		v1beta1common.TfEventCollector,
 		v1beta1common.FileCollector,

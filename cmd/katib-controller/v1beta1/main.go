@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -15,7 +15,7 @@ limitations under the License.
 */
 
 /*
- Katib-controller is a controller (operator) for Experiments and Trials
+Katib-controller is a controller (operator) for Experiments and Trials
 */
 package main
 
@@ -24,59 +24,75 @@ import (
 	"os"
 
 	"github.com/spf13/viper"
+	"k8s.io/apimachinery/pkg/runtime"
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	configv1beta1 "github.com/kubeflow/katib/pkg/apis/config/v1beta1"
 	apis "github.com/kubeflow/katib/pkg/apis/controller"
-	controller "github.com/kubeflow/katib/pkg/controller.v1beta1"
+	cert "github.com/kubeflow/katib/pkg/certgenerator/v1beta1"
+	"github.com/kubeflow/katib/pkg/controller.v1beta1"
 	"github.com/kubeflow/katib/pkg/controller.v1beta1/consts"
-	trialutil "github.com/kubeflow/katib/pkg/controller.v1beta1/trial/util"
-	webhook "github.com/kubeflow/katib/pkg/webhook/v1beta1"
+	"github.com/kubeflow/katib/pkg/util/v1beta1/katibconfig"
+	webhookv1beta1 "github.com/kubeflow/katib/pkg/webhook/v1beta1"
+	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 )
+
+var (
+	scheme = runtime.NewScheme()
+	log    = logf.Log.WithName("entrypoint")
+)
+
+func init() {
+	utilruntime.Must(apis.AddToScheme(scheme))
+	utilruntime.Must(configv1beta1.AddToScheme(scheme))
+	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
+}
 
 func main() {
 	logf.SetLogger(zap.New())
-	log := logf.Log.WithName("entrypoint")
 
-	var experimentSuggestionName string
-	var metricsAddr string
-	var webhookPort int
-	var injectSecurityContext bool
-	var enableGRPCProbeInSuggestion bool
-	var trialResources trialutil.GvkListFlag
-
-	flag.StringVar(&experimentSuggestionName, "experiment-suggestion-name",
-		"default", "The implementation of suggestion interface in experiment controller (default)")
-	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
-	flag.BoolVar(&injectSecurityContext, "webhook-inject-securitycontext", false, "Inject the securityContext of container[0] in the sidecar")
-	flag.BoolVar(&enableGRPCProbeInSuggestion, "enable-grpc-probe-in-suggestion", true, "enable grpc probe in suggestions")
-	flag.Var(&trialResources, "trial-resources", "The list of resources that can be used as trial template, in the form: Kind.version.group (e.g. TFJob.v1.kubeflow.org)")
-	flag.IntVar(&webhookPort, "webhook-port", 8443, "The port number to be used for admission webhook server.")
-
-	// TODO (andreyvelich): Currently it is not possible to set different webhook service name.
-	// flag.StringVar(&serviceName, "webhook-service-name", "katib-controller", "The service name which will be used in webhook")
-	// TODO (andreyvelich): Currently is is not possible to store webhook cert in the local file system.
-	// flag.BoolVar(&certLocalFS, "cert-localfs", false, "Store the webhook cert in local file system")
-
+	var katibConfigFile string
+	flag.StringVar(&katibConfigFile, "katib-config", "",
+		"The katib-controller will load its initial configuration from this file. "+
+			"Omit this flag to use the default configuration values. ")
 	flag.Parse()
 
+	initConfig, err := katibconfig.GetInitConfigData(scheme, katibConfigFile)
+	if err != nil {
+		log.Error(err, "Failed to get KatibConfig")
+		os.Exit(1)
+	}
+
 	// Set the config in viper.
-	viper.Set(consts.ConfigExperimentSuggestionName, experimentSuggestionName)
-	viper.Set(consts.ConfigInjectSecurityContext, injectSecurityContext)
-	viper.Set(consts.ConfigEnableGRPCProbeInSuggestion, enableGRPCProbeInSuggestion)
-	viper.Set(consts.ConfigTrialResources, trialResources)
+	viper.Set(consts.ConfigExperimentSuggestionName, initConfig.ControllerConfig.ExperimentSuggestionName)
+	viper.Set(consts.ConfigInjectSecurityContext, initConfig.ControllerConfig.InjectSecurityContext)
+	viper.Set(consts.ConfigEnableGRPCProbeInSuggestion, initConfig.ControllerConfig.EnableGRPCProbeInSuggestion)
+
+	trialGVKs, err := katibconfig.TrialResourcesToGVKs(initConfig.ControllerConfig.TrialResources)
+	if err != nil {
+		log.Error(err, "Failed to parse trialResources")
+		os.Exit(1)
+	}
+	viper.Set(consts.ConfigTrialResources, trialGVKs)
 
 	log.Info("Config:",
 		consts.ConfigExperimentSuggestionName,
 		viper.GetString(consts.ConfigExperimentSuggestionName),
 		"webhook-port",
-		webhookPort,
+		initConfig.ControllerConfig.WebhookPort,
 		"metrics-addr",
-		metricsAddr,
+		initConfig.ControllerConfig.MetricsAddr,
+		"healthz-addr",
+		initConfig.ControllerConfig.HealthzAddr,
 		consts.ConfigInjectSecurityContext,
 		viper.GetBool(consts.ConfigInjectSecurityContext),
 		consts.ConfigEnableGRPCProbeInSuggestion,
@@ -94,20 +110,65 @@ func main() {
 
 	// Create a new katib controller to provide shared dependencies and start components
 	mgr, err := manager.New(cfg, manager.Options{
-		MetricsBindAddress: metricsAddr,
+		Metrics: metricsserver.Options{
+			BindAddress: initConfig.ControllerConfig.MetricsAddr,
+		},
+		HealthProbeBindAddress: initConfig.ControllerConfig.HealthzAddr,
+		LeaderElection:         initConfig.ControllerConfig.EnableLeaderElection,
+		LeaderElectionID:       initConfig.ControllerConfig.LeaderElectionID,
+		Scheme:                 scheme,
 	})
 	if err != nil {
-		log.Error(err, "unable add APIs to scheme")
+		log.Error(err, "Failed to create the manager")
 		os.Exit(1)
 	}
 
 	log.Info("Registering Components.")
 
-	// Setup Scheme for all resources
-	if err := apis.AddToScheme(mgr.GetScheme()); err != nil {
-		log.Error(err, "Fail to create the manager")
+	// Create a webhook server.
+	hookServer := webhook.NewServer(webhook.Options{
+		Port:    *initConfig.ControllerConfig.WebhookPort,
+		CertDir: consts.CertDir,
+	})
+
+	ctx := signals.SetupSignalHandler()
+	certsReady := make(chan struct{})
+	defer close(certsReady)
+
+	// The setupControllers will register controllers to the manager
+	// after generated certs for the admission webhooks.
+	go setupControllers(mgr, certsReady, hookServer)
+
+	if initConfig.CertGeneratorConfig.Enable {
+		if err = cert.AddToManager(mgr, initConfig.CertGeneratorConfig, certsReady); err != nil {
+			log.Error(err, "Failed to set up cert-generator")
+		}
+	} else {
+		certsReady <- struct{}{}
+	}
+
+	log.Info("Setting up health checker.")
+	if err := mgr.AddReadyzCheck("readyz", hookServer.StartedChecker()); err != nil {
+		log.Error(err, "Unable to add readyz endpoint to the manager")
 		os.Exit(1)
 	}
+	if err = mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		log.Error(err, "Add webhook server health checker to the manager failed")
+		os.Exit(1)
+	}
+
+	// Start the Cmd
+	log.Info("Starting the manager.")
+	if err = mgr.Start(ctx); err != nil {
+		log.Error(err, "Unable to run the manager")
+		os.Exit(1)
+	}
+}
+
+func setupControllers(mgr manager.Manager, certsReady chan struct{}, hookServer webhook.Server) {
+	// The certsReady blocks to register controllers until generated certs.
+	<-certsReady
+	log.Info("Certs ready")
 
 	// Setup all Controllers
 	log.Info("Setting up controller.")
@@ -117,15 +178,8 @@ func main() {
 	}
 
 	log.Info("Setting up webhooks.")
-	if err := webhook.AddToManager(mgr, webhookPort); err != nil {
+	if err := webhookv1beta1.AddToManager(mgr, hookServer); err != nil {
 		log.Error(err, "Unable to register webhooks to the manager")
-		os.Exit(1)
-	}
-
-	// Start the Cmd
-	log.Info("Starting the Cmd.")
-	if err := mgr.Start(signals.SetupSignalHandler()); err != nil {
-		log.Error(err, "Unable to run the manager")
 		os.Exit(1)
 	}
 }

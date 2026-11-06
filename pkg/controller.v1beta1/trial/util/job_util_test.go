@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,15 +17,15 @@ limitations under the License.
 package util
 
 import (
-	"reflect"
 	"testing"
 
-	commonv1 "github.com/kubeflow/common/pkg/apis/common/v1"
-	tfv1 "github.com/kubeflow/tf-operator/pkg/apis/tensorflow/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	trialsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/trials/v1beta1"
 	"github.com/kubeflow/katib/pkg/controller.v1beta1/util"
 )
@@ -37,88 +37,77 @@ const (
 
 func TestGetDeployedJobStatus(t *testing.T) {
 
-	successCondition := "status.conditions.#(type==\"Succeeded\")#|#(status==\"True\")#"
+	successCondition := "status.conditions.#(type==\"Complete\")#|#(status==\"True\")#"
 	failureCondition := "status.conditions.#(type==\"Failed\")#|#(status==\"True\")#"
 
-	tcs := []struct {
-		trial                  *trialsv1beta1.Trial
-		deployedJob            *unstructured.Unstructured
-		expectedTrialJobStatus *TrialJobStatus
-		err                    bool
-		testDescription        string
+	cases := map[string]struct {
+		trial              *trialsv1beta1.Trial
+		deployedJob        *unstructured.Unstructured
+		wantTrialJobStatus *TrialJobStatus
+		wantError          error
 	}{
-		{
+		"Job status is running": {
 			trial: newFakeTrial(successCondition, failureCondition),
 			deployedJob: func() *unstructured.Unstructured {
-				tfJob := newFakeTFJob()
-				tfJob.Status.Conditions[0].Status = corev1.ConditionFalse
-				tfJob.Status.Conditions[1].Status = corev1.ConditionFalse
-				return newFakeDeployedJob(tfJob)
+				job := newFakeJob()
+				job.Status.Conditions[0].Status = corev1.ConditionFalse
+				job.Status.Conditions[1].Status = corev1.ConditionFalse
+				return newFakeDeployedJob(job)
 			}(),
-			expectedTrialJobStatus: func() *TrialJobStatus {
+			wantTrialJobStatus: func() *TrialJobStatus {
 				return &TrialJobStatus{
 					Condition: JobRunning,
 				}
 			}(),
-			err:             false,
-			testDescription: "TFJob status is running",
 		},
-		{
+		"Job status is succeeded, reason and message must be returned": {
 			trial:       newFakeTrial(successCondition, failureCondition),
-			deployedJob: newFakeDeployedJob(newFakeTFJob()),
-			expectedTrialJobStatus: func() *TrialJobStatus {
+			deployedJob: newFakeDeployedJob(newFakeJob()),
+			wantTrialJobStatus: func() *TrialJobStatus {
 				return &TrialJobStatus{
 					Condition: JobSucceeded,
 					Message:   testMessage,
 					Reason:    testReason,
 				}
 			}(),
-			err:             false,
-			testDescription: "TFJob status is succeeded, reason and message must be returned",
 		},
-		{
+		"Job status is failed, reason and message must be returned": {
 			trial: newFakeTrial(successCondition, failureCondition),
 			deployedJob: func() *unstructured.Unstructured {
-				tfJob := newFakeTFJob()
-				tfJob.Status.Conditions[0].Status = corev1.ConditionTrue
-				tfJob.Status.Conditions[1].Status = corev1.ConditionFalse
-				return newFakeDeployedJob(tfJob)
+				job := newFakeJob()
+				job.Status.Conditions[0].Status = corev1.ConditionTrue
+				job.Status.Conditions[1].Status = corev1.ConditionFalse
+				return newFakeDeployedJob(job)
 			}(),
-			expectedTrialJobStatus: func() *TrialJobStatus {
+			wantTrialJobStatus: func() *TrialJobStatus {
 				return &TrialJobStatus{
 					Condition: JobFailed,
 					Message:   testMessage,
 					Reason:    testReason,
 				}
 			}(),
-			err:             false,
-			testDescription: "TFJob status is failed, reason and message must be returned",
 		},
-		{
-			trial:       newFakeTrial("status.replicaStatuses.master.[@this].#(active==\"1\")", failureCondition),
-			deployedJob: newFakeDeployedJob(newFakeTFJob()),
-			expectedTrialJobStatus: func() *TrialJobStatus {
+		"Job status is succeeded because status.succeeded = 1": {
+			trial:       newFakeTrial("status.[@this].#(succeeded==1)", failureCondition),
+			deployedJob: newFakeDeployedJob(newFakeJob()),
+			wantTrialJobStatus: func() *TrialJobStatus {
 				return &TrialJobStatus{
 					Condition: JobSucceeded,
 				}
 			}(),
-			err:             false,
-			testDescription: "TFJob status is succeeded because active = 1 in replica statuses",
 		},
 	}
 
-	for _, tc := range tcs {
-		actualTrialJobStatus, err := GetDeployedJobStatus(tc.trial, tc.deployedJob)
-
-		if tc.err && err == nil {
-			t.Errorf("Case: %v failed. Expected err, got nil", tc.testDescription)
-		} else if !tc.err {
-			if err != nil {
-				t.Errorf("Case: %v failed. Expected nil, got %v", tc.testDescription, err)
-			} else if !reflect.DeepEqual(tc.expectedTrialJobStatus, actualTrialJobStatus) {
-				t.Errorf("Case: %v failed. Expected %v\n got %v", tc.testDescription, tc.expectedTrialJobStatus, actualTrialJobStatus)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := GetDeployedJobStatus(tc.trial, tc.deployedJob)
+			if diff := cmp.Diff(tc.wantError, err, cmpopts.EquateErrors()); len(diff) != 0 {
+				t.Errorf("Unexpected error from GetDeployedJobStatus() (-want,+got):\n%s", diff)
 			}
-		}
+			if diff := cmp.Diff(tc.wantTrialJobStatus, got); len(diff) != 0 {
+				t.Errorf("Unexpected trial job status from GetDeployedJobStatus() (-want,+got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -131,34 +120,31 @@ func newFakeTrial(successCondition, failureCondition string) *trialsv1beta1.Tria
 	}
 }
 
-func newFakeTFJob() *tfv1.TFJob {
-	return &tfv1.TFJob{
+func newFakeJob() *batchv1.Job {
+	return &batchv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: "test-tfjob",
+			Name: "test-job",
 		},
-		Status: commonv1.JobStatus{
-			Conditions: []commonv1.JobCondition{
+		Status: batchv1.JobStatus{
+			Conditions: []batchv1.JobCondition{
 				{
-					Type:    commonv1.JobFailed,
+					Type:    batchv1.JobFailed,
 					Status:  corev1.ConditionFalse,
 					Reason:  testReason,
 					Message: testMessage,
 				},
 				{
-					Type:    commonv1.JobSucceeded,
+					Type:    batchv1.JobComplete,
 					Status:  corev1.ConditionTrue,
 					Reason:  testReason,
 					Message: testMessage,
 				},
 			},
-			ReplicaStatuses: map[commonv1.ReplicaType]*commonv1.ReplicaStatus{
-				"master": {
-					Active: int32(1),
-				},
-			},
+			Succeeded: 1,
 		},
 	}
 }
+
 func newFakeDeployedJob(job interface{}) *unstructured.Unstructured {
 
 	jobUnstructured, _ := util.ConvertObjectToUnstructured(job)

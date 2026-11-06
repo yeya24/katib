@@ -6,6 +6,12 @@ __pycache__/
 *.egg-info
 build/
 *.charm
+test/unit/v1beta1/metricscollector/testdata
+dist/
+
+# SDK generator JAR file
+hack/gen-python-sdk/openapi-generator-cli.jar
+hack/gen-python-api/openapi-generator-cli.jar
 
 # Project specific ignore files
 *.swp
@@ -18,6 +24,7 @@ bin
 *.dll
 *.so
 *.dylib
+pkg/metricscollector/v1beta1/file-metricscollector/testdata
 
 ## Test binary, build with `go test -c`
 *.test
@@ -73,3 +80,6 @@ $RECYCLE.BIN/
 
 ## Vendor dir
 vendor
+
+# Jupyter Notebooks.
+**/.ipynb_checkpoints

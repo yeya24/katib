@@ -1,15 +1,33 @@
+# Kubeflow Katib
+
+[![Build Status](https://github.com/kubeflow/katib/actions/workflows/test-go.yaml/badge.svg?branch=master)](https://github.com/kubeflow/katib/actions/workflows/test-go.yaml?branch=master)
+[![Coverage Status](https://coveralls.io/repos/github/kubeflow/katib/badge.svg?branch=master)](https://coveralls.io/github/kubeflow/katib?branch=master)
+[![Go Report Card](https://goreportcard.com/badge/github.com/kubeflow/katib)](https://goreportcard.com/report/github.com/kubeflow/katib)
+[![Releases](https://img.shields.io/github/release-pre/kubeflow/katib.svg?sort=semver)](https://github.com/kubeflow/katib/releases)
+[![Slack Status](https://img.shields.io/badge/slack-join_chat-white.svg?logo=slack&style=social)](https://www.kubeflow.org/docs/about/community/#kubeflow-slack-channels)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/9941/badge)](https://www.bestpractices.dev/projects/9941)
+[![FOSSA Status](https://app.fossa.com/api/projects/git%2Bgithub.com%2Fkubeflow%2Fkatib.svg?type=shield)](https://app.fossa.com/projects/git%2Bgithub.com%2Fkubeflow%2Fkatib?ref=badge_shield)
+
 <h1 align="center">
     <img src="./docs/images/logo-title.png" alt="logo" width="200">
   <br>
 </h1>
 
-[![Build Status](https://travis-ci.com/kubeflow/katib.svg?branch=master)](https://travis-ci.com/kubeflow/katib)
-[![Coverage Status](https://coveralls.io/repos/github/kubeflow/katib/badge.svg?branch=master)](https://coveralls.io/github/kubeflow/katib?branch=master)
-[![Go Report Card](https://goreportcard.com/badge/github.com/kubeflow/katib)](https://goreportcard.com/report/github.com/kubeflow/katib)
-[![Releases](https://img.shields.io/github/release-pre/kubeflow/katib.svg?sort=semver)](https://github.com/kubeflow/katib/releases)
-[![Slack Status](https://img.shields.io/badge/slack-join_chat-white.svg?logo=slack&style=social)](https://kubeflow.slack.com/archives/C018PMV53NW)
+> [!WARNING]
+> **The Katib project is deprecated.** Users should migrate to the
+> [OptimizationJob APIs](https://trainer.kubeflow.org/en/latest/user-guides/optimizationjob.html),
+> which are released as part of the [Kubeflow Trainer](https://github.com/kubeflow/trainer) project
+> under the alpha feature gate.
+>
+> OptimizationJob is the next step for hyperparameter optimization in Kubeflow. It is natively
+> integrated with the TrainJob API, so every trial can use Trainer runtimes and distributed
+> training features out of the box. Metrics are pushed through the Kubeflow SDK and Trainer status
+> server, so you no longer need a separate database or a metrics collector sidecar.
+>
+> Work on the remaining features is tracked in
+> [kubeflow/trainer#3562](https://github.com/kubeflow/trainer/issues/3562).
 
-Katib is a Kubernetes-native project for automated machine learning (AutoML).
+Kubeflow Katib is a Kubernetes-native project for automated machine learning (AutoML).
 Katib supports
 [Hyperparameter Tuning](https://en.wikipedia.org/wiki/Hyperparameter_optimization),
 [Early Stopping](https://en.wikipedia.org/wiki/Early_stopping) and
@@ -17,349 +35,187 @@ Katib supports
 
 Katib is the project which is agnostic to machine learning (ML) frameworks.
 It can tune hyperparameters of applications written in any language of the
-users’ choice and natively supports many ML frameworks, such as TensorFlow,
-MXNet, PyTorch, XGBoost, and others.
+users’ choice and natively supports many ML frameworks, such as
+[TensorFlow](https://www.tensorflow.org/), [PyTorch](https://pytorch.org/), [XGBoost](https://xgboost.readthedocs.io/en/latest/), and others.
 
-<!-- START doctoc generated TOC please keep comment here to allow auto update -->
-<!-- DON'T EDIT THIS SECTION, INSTEAD RE-RUN doctoc TO UPDATE -->
-
-# Table of Contents
-
-- [Getting Started](#getting-started)
-- [Name](#name)
-- [Concepts in Katib](#concepts-in-katib)
-  - [Experiment](#experiment)
-  - [Suggestion](#suggestion)
-  - [Trial](#trial)
-  - [Worker Job](#worker-job)
-  - [Search Algorithms](#search-algorithms)
-    - [Hyperparameter Tuning](#hyperparameter-tuning)
-    - [Neural Architecture Search](#neural-architecture-search)
-- [Components in Katib](#components-in-katib)
-- [Web UI](#web-ui)
-  - [New UI](#new-ui)
-- [GRPC API documentation](#grpc-api-documentation)
-- [Installation](#installation)
-  - [TF operator](#tf-operator)
-  - [PyTorch operator](#pytorch-operator)
-  - [Katib](#katib)
-  - [Running examples](#running-examples)
-  - [Katib SDK](#katib-sdk)
-  - [Cleanups](#cleanups)
-- [Quick Start](#quick-start)
-- [Community](#community)
-  - [Blog posts](#blog-posts)
-- [Contributing](#contributing)
-- [Citation](#citation)
-
-<!-- END doctoc generated TOC please keep comment here to allow auto update -->
-
-Created by [doctoc](https://github.com/thlorenz/doctoc).
-
-## Getting Started
-
-Follow the
-[getting-started guide](https://www.kubeflow.org/docs/components/katib/hyperparameter/)
-on the Kubeflow website.
-
-## Name
+Katib can perform training jobs using any Kubernetes
+[Custom Resources](https://www.kubeflow.org/docs/components/katib/trial-template/)
+with out of the box support for [Kubeflow Training Operator](https://github.com/kubeflow/training-operator),
+[Argo Workflows](https://github.com/argoproj/argo-workflows), [Tekton Pipelines](https://github.com/tektoncd/pipeline)
+and many more.
 
 Katib stands for `secretary` in Arabic.
 
-## Concepts in Katib
+## Search Algorithms
 
-For a detailed description of the concepts in Katib and AutoML, check the
-[Kubeflow documentation](https://www.kubeflow.org/docs/components/katib/overview/).
+Katib supports several search algorithms. Follow the
+[Kubeflow documentation](https://www.kubeflow.org/docs/components/katib/user-guides/hp-tuning/configure-algorithm/#hp-tuning-algorithms)
+to know more about each algorithm and check the
+[this guide](https://www.kubeflow.org/docs/components/katib/user-guides/hp-tuning/configure-algorithm/#use-custom-algorithm-in-katib)
+to implement your custom algorithm.
 
-Katib has the concepts of `Experiment`, `Suggestion`, `Trial` and `Worker Job`.
+<table>
+  <tbody>
+    <tr align="center">
+      <td>
+        <b>Hyperparameter Tuning</b>
+      </td>
+      <td>
+        <b>Neural Architecture Search</b>
+      </td>
+      <td>
+        <b>Early Stopping</b>
+      </td>
+    </tr>
+    <tr align="center">
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#random-search">Random Search</a>
+      </td>
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#neural-architecture-search-based-on-enas">ENAS</a>
+      </td>
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/early-stopping/#median-stopping-rule">Median Stop</a>
+      </td>
+    </tr>
+    <tr align="center">
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#grid-search">Grid Search</a>
+      </td>
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#differentiable-architecture-search-darts">DARTS</a>
+      </td>
+      <td>
+      </td>
+    </tr>
+    <tr align="center">
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#bayesian-optimization">Bayesian Optimization</a>
+      </td>
+      <td>
+      </td>
+      <td>
+      </td>
+    </tr>
+    <tr align="center">
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#tree-of-parzen-estimators-tpe">TPE</a>
+      </td>
+      <td>
+      </td>
+      <td>
+      </td>
+    </tr>
+    <tr align="center">
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#multivariate-tpe">Multivariate TPE</a>
+      </td>
+      <td>
+      </td>
+      <td>
+      </td>
+    </tr>
+    <tr align="center">
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#covariance-matrix-adaptation-evolution-strategy-cma-es">CMA-ES</a>
+      </td>
+      <td>
+      </td>
+      <td>
+      </td>
+    </tr>
+    <tr align="center">
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#sobols-quasirandom-sequence">Sobol's Quasirandom Sequence</a>
+      </td>
+      <td>
+      </td>
+      <td>
+      </td>
+    </tr>
+    <tr align="center">
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#hyperband">HyperBand</a>
+      </td>
+      <td>
+      </td>
+      <td>
+      </td>
+    </tr>
+    <tr align="center">
+      <td>
+        <a href="https://www.kubeflow.org/docs/components/katib/experiment/#pbt">Population Based Training</a>
+      </td>
+      <td>
+      </td>
+      <td>
+      </td>
+    </tr>
+  </tbody>
+</table>
 
-### Experiment
+To perform the above algorithms Katib supports the following frameworks:
 
-An `Experiment` represents a single optimization run over a feasible space.
-Each `Experiment` contains a configuration:
+- [Goptuna](https://github.com/c-bata/goptuna)
+- [Hyperopt](https://github.com/hyperopt/hyperopt)
+- [Optuna](https://github.com/optuna/optuna)
+- [Scikit Optimize](https://github.com/scikit-optimize/scikit-optimize)
 
-1. **Objective**: What you want to optimize.
-2. **Search Space**: Constraints for configurations describing the feasible space.
-3. **Search Algorithm**: How to find the optimal configurations.
+## Prerequisites
 
-Katib `Experiment` is defined as a CRD. Check the detailed guide to
-[configuring and running a Katib `Experiment`](https://kubeflow.org/docs/components/katib/experiment/)
-in the Kubeflow docs.
-
-### Suggestion
-
-A `Suggestion` is a set of hyperparameter values that the hyperparameter tuning
-process has proposed. Katib creates a `Trial` to evaluate
-the suggested set of values.
-
-Katib `Suggestion` is defined as a CRD.
-
-### Trial
-
-A `Trial` is one iteration of the hyperparameter tuning process.
-A `Trial` corresponds to one worker job instance with a list of parameter
-assignments. The list of parameter assignments corresponds to a `Suggestion`.
-
-Each `Experiment` runs several `Trials`. The `Experiment` runs the `Trials` until
-it reaches either the objective or the configured maximum number of `Trials`.
-
-Katib `Trial` is defined as a CRD.
-
-### Worker Job
-
-The `Worker Job` is the process that runs to evaluate a `Trial` and calculate
-its objective value.
-
-The `Worker Job` can be any type of Kubernetes resource or
-[Kubernetes CRD](https://kubernetes.io/docs/concepts/extend-kubernetes/api-extension/custom-resources/).
-Follow the [`Trial` template guide](https://www.kubeflow.org/docs/components/katib/trial-template/#custom-resource)
-to support your own Kubernetes resource in Katib.
-
-Katib has these CRD examples in upstream:
-
-- [Kubernetes `Job`](https://kubernetes.io/docs/concepts/workloads/controllers/job/)
-
-- [Kubeflow `TFJob`](https://www.kubeflow.org/docs/components/training/tftraining/)
-
-- [Kubeflow `PyTorchJob`](https://www.kubeflow.org/docs/components/training/pytorch/)
-
-- [Kubeflow `MPIJob`](https://www.kubeflow.org/docs/components/training/mpi/)
-
-- [Tekton `Pipeline`](https://github.com/tektoncd/pipeline)
-
-Thus, Katib supports multiple frameworks with the help of different job kinds.
-
-### Search Algorithms
-
-Katib currently supports several search algorithms. Follow the
-[Kubeflow documentation](https://www.kubeflow.org/docs/components/katib/experiment/#search-algorithms-in-detail)
-to know more about each algorithm.
-
-#### Hyperparameter Tuning
-
-- [Random Search](https://en.wikipedia.org/wiki/Hyperparameter_optimization#Random_search)
-- [Tree of Parzen Estimators (TPE)](https://papers.nips.cc/paper/4443-algorithms-for-hyper-parameter-optimization.pdf)
-- [Grid Search](https://en.wikipedia.org/wiki/Hyperparameter_optimization#Grid_search)
-- [Hyperband](https://arxiv.org/pdf/1603.06560.pdf)
-- [Bayesian Optimization](https://arxiv.org/pdf/1012.2599.pdf)
-- [Covariance Matrix Adaptation Evolution Strategy (CMA-ES)](https://arxiv.org/abs/1604.00772)
-
-#### Neural Architecture Search
-
-- [Efficient Neural Architecture Search (ENAS)](https://github.com/kubeflow/katib/tree/master/pkg/suggestion/v1beta1/nas/enas)
-- [Differentiable Architecture Search (DARTS)](https://github.com/kubeflow/katib/tree/master/pkg/suggestion/v1beta1/nas/darts)
-
-## Components in Katib
-
-Katib consists of several components as shown below. Each component is running
-on Kubernetes as a deployment. Each component communicates with others via GRPC
-and the API is defined at `pkg/apis/manager/v1beta1/api.proto`.
-
-- Katib main components:
-  - `katib-db-manager` - the GRPC API server of Katib which is the DB Interface.
-  - `katib-mysql` - the data storage backend of Katib using mysql.
-  - `katib-ui` - the user interface of Katib.
-  - `katib-controller` - the controller for the Katib CRDs in Kubernetes.
-
-## Web UI
-
-Katib provides a Web UI.
-You can visualize general trend of Hyper parameter space and
-each training history. You can use
-[random-example](https://github.com/kubeflow/katib/blob/master/examples/v1beta1/random-example.yaml)
-or
-[other examples](https://github.com/kubeflow/katib/blob/master/examples/v1beta1)
-to generate a similar UI. Follow the
-[Kubeflow documentation](https://www.kubeflow.org/docs/components/katib/hyperparameter/#katib-ui)
-to access the Katib UI.
-![katibui](./docs/images/katib-ui.png)
-
-### New UI
-
-During 1.3 we've worked on a new iteration of the UI, which is rewritten in
-Angular and is utilizing the common code of the other Kubeflow [dashboards](https://github.com/kubeflow/kubeflow/tree/master/components/crud-web-apps).
-While this UI is not yet on par with the current default one, we are actively
-working to get it up to speed and provide all the existing functionalities.
-
-The users are currently able to list, delete and create Experiments in their
-cluster via this new UI as well as inspect the owned Trials. One important
-missing functionalities are the ability to edit the TrialTemplate ConfigMaps.
-
-While this UI is not ready to replace the current one we would like to
-encourage users to also give it a try and provide us with feedback. To try it
-out the user has to update the Katib UI image `newName` with the new registry
-`docker.io/kubeflowkatib/katib-new-ui` in the [Kustomize](https://github.com/kubeflow/katib/blob/54854c1bb/manifests/v1beta1/installs/katib-standalone/kustomization.yaml#L29)
-manifests.
-
-![newkatibui](./docs/images/katib-new-ui.png)
-
-## GRPC API documentation
-
-Check the [Katib v1beta1 API reference docs](https://www.kubeflow.org/docs/reference/katib/v1beta1/katib/).
+Please check [the official Kubeflow documentation](https://www.kubeflow.org/docs/components/katib/installation/#prerequisites)
+for prerequisites to install Katib.
 
 ## Installation
 
-For standard installation of Katib with support for all job operators,
-install Kubeflow.
-Follow the documentation:
+Please follow [the Kubeflow Katib guide](https://www.kubeflow.org/docs/components/katib/installation/#installing-katib)
+for the detailed instructions on how to install Katib.
 
-- [Kubeflow installation guide](https://www.kubeflow.org/docs/started/getting-started/)
-- [Kubeflow Katib guides](https://www.kubeflow.org/docs/components/katib/).
+### Installing the Control Plane
 
-If you install Katib with other Kubeflow components,
-you can't submit Katib jobs in Kubeflow namespace. Check the
-[Kubeflow documentation](https://www.kubeflow.org/docs/components/katib/hyperparameter/#example-using-random-algorithm)
-to know more about it.
-
-Alternatively, if you want to install Katib manually with TF and PyTorch
-operators support, follow these steps:
-
-Create Kubeflow namespace:
+Run the following command to install the latest stable release of Katib control plane:
 
 ```
-kubectl create namespace kubeflow
+kubectl apply -k "github.com/kubeflow/katib.git/manifests/v1beta1/installs/katib-standalone?ref=v0.17.0"
 ```
 
-Clone Kubeflow manifest repository:
+Run the following command to install the latest changes of Katib control plane:
 
 ```
-git clone -b v1.2-branch git@github.com:kubeflow/manifests.git
-Set `MANIFESTS_DIR` to the cloned folder.
-export MANIFESTS_DIR=<cloned-folder>
+kubectl apply -k "github.com/kubeflow/katib.git/manifests/v1beta1/installs/katib-standalone?ref=master"
 ```
 
-### TF operator
+For the Katib Experiments check the [complete examples list](./examples/v1beta1).
 
-For installing TF operator, run the following:
+### Installing the Python SDK
 
-```
-cd "${MANIFESTS_DIR}/tf-training/tf-job-crds/base"
-kustomize build . | kubectl apply -f -
-cd "${MANIFESTS_DIR}/tf-training/tf-job-operator/base"
-kustomize build . | kubectl apply -f -
-```
+Katib implements [a Python SDK](https://pypi.org/project/kubeflow-katib/) to simplify creation of
+hyperparameter tuning jobs for Data Scientists.
 
-### PyTorch operator
+Run the following command to install the latest stable release of Katib SDK:
 
-For installing PyTorch operator, run the following:
-
-```
-cd "${MANIFESTS_DIR}/pytorch-job/pytorch-job-crds/base"
-kustomize build . | kubectl apply -f -
-cd "${MANIFESTS_DIR}/pytorch-job/pytorch-operator/base/"
-kustomize build . | kubectl apply -f -
+```sh
+pip install -U kubeflow-katib
 ```
 
-### Katib
+## Getting Started
 
-Note that your [kustomize](https://kustomize.io/) version should be >= 3.2.
-To install Katib run:
-
-```
-git clone git@github.com:kubeflow/katib.git
-make deploy
-```
-
-Check if all components are running successfully:
-
-```
-kubectl get pods -n kubeflow
-```
-
-Expected output:
-
-```
-NAME                                READY   STATUS    RESTARTS   AGE
-katib-controller-858d6cc48c-df9jc   1/1     Running   1          20m
-katib-db-manager-7966fbdf9b-w2tn8   1/1     Running   0          20m
-katib-mysql-7f8bc6956f-898f9        1/1     Running   0          20m
-katib-ui-7cf9f967bf-nm72p           1/1     Running   0          20m
-pytorch-operator-55f966b548-9gq9v   1/1     Running   0          20m
-tf-job-operator-796b4747d8-4fh82    1/1     Running   0          21m
-```
-
-### Running examples
-
-After deploy everything, you can run examples to verify the installation.
-
-This is an example for TF operator:
-
-```
-kubectl create -f https://raw.githubusercontent.com/kubeflow/katib/master/examples/v1beta1/tfjob-example.yaml
-```
-
-This is an example for PyTorch operator:
-
-```
-kubectl create -f https://raw.githubusercontent.com/kubeflow/katib/master/examples/v1beta1/pytorchjob-example.yaml
-```
-
-Check the
-[Kubeflow documentation](https://www.kubeflow.org/docs/components/katib/hyperparameter/#example-using-random-algorithm)
-how to monitor your `Experiment` status.
-
-You can view your results in Katib UI.
-If you used standard installation, access the Katib UI via Kubeflow dashboard.
-Otherwise, port-forward the `katib-ui`:
-
-```
-kubectl -n kubeflow port-forward svc/katib-ui 8080:80
-```
-
-You can access the Katib UI using this URL: `http://localhost:8080/katib/`.
-
-### Katib SDK
-
-Katib supports Python SDK:
-
-- Check the [Katib v1beta1 SDK documentation](https://github.com/kubeflow/katib/tree/master/sdk/python/v1beta1).
-
-Run `make generate` to update Katib SDK.
-
-### Cleanups
-
-To delete installed TF and PyTorch operator run `kubectl delete -f`
-on the respective folders.
-
-To delete Katib run `make undeploy`.
-
-## Quick Start
-
-Please follow the
-[Kubeflow documentation](https://www.kubeflow.org/docs/components/katib/hyperparameter/#examples)
-to submit your first Katib experiment.
+Please refer to [the getting started guide](https://www.kubeflow.org/docs/components/katib/getting-started/#getting-started-with-katib-python-sdk)
+to quickly create your first hyperparameter tuning Experiment using the Python SDK.
 
 ## Community
 
-We are always growing our community and invite new users and AutoML enthusiasts
-to contribute to the Katib project. The following links provide information
-about getting involved in the community:
+The following links provide information on how to get involved in the community:
 
-- If you use Katib, please update [the adopters list](ADOPTERS.md).
-
-- Subscribe
-  [to the calendar](https://calendar.google.com/calendar/u/0/r?cid=ZDQ5bnNpZWZzbmZna2Y5MW8wdThoMmpoazRAZ3JvdXAuY2FsZW5kYXIuZ29vZ2xlLmNvbQ)
-  to attend the AutoML WG community meeting.
-
-- Check
-  [the AutoML WG meeting notes](https://docs.google.com/document/d/1MChKfzrKAeFRtYqypFbMXL6ZIc_OgijjkvbqmwRV-64/edit).
-
-- Join
-  [the AutoML WG Slack channel](https://kubeflow.slack.com/archives/C018PMV53NW).
-
-- Learn more about Katib in
-  [the presentations and demos list](./docs/presentations.md).
-
-### Blog posts
-
-- [Kubeflow Katib: Scalable, Portable and Cloud Native System for AutoML](https://blog.kubeflow.org/katib/)
-  (by Andrey Velichkevich)
+- Attend [the bi-weekly AutoML and Training Working Group](https://bit.ly/2PWVCkV)
+  community meeting.
+- Join our [`#kubeflow-katib`](https://www.kubeflow.org/docs/about/community/#kubeflow-slack-channels)
+  Slack channel.
+- Check out [who is using Katib](ADOPTERS.md) and [presentations about Katib project](docs/presentations.md).
 
 ## Contributing
 
-Please feel free to test the system!
-[developer-guide.md](./docs/developer-guide.md) is a good starting point
-for developers.
+Please refer to the [CONTRIBUTING guide](CONTRIBUTING.md).
 
 ## Citation
 

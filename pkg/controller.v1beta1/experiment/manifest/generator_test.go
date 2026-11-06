@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,12 +17,12 @@ limitations under the License.
 package manifest
 
 import (
-	"errors"
 	"math"
-	"reflect"
 	"testing"
 
-	"github.com/golang/mock/gomock"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
+	"go.uber.org/mock/gomock"
 	batchv1 "k8s.io/api/batch/v1"
 	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -61,12 +61,14 @@ func TestGetRunSpecWithHP(t *testing.T) {
 					Containers: []v1.Container{
 						{
 							Name:  "training-container",
-							Image: "docker.io/kubeflowkatib/mxnet-mnist",
+							Image: "ghcr.io/kubeflow/katib/pytorch-mnist-cpu",
 							Command: []string{
 								"python3",
-								"/opt/mxnet-mnist/mnist.py",
+								"/opt/pytorch-mnist/mnist.py",
+								"--epochs=1",
+								"--batch-size=16",
 								"--lr=0.05",
-								"--num-layers=5",
+								"--momentum=0.9",
 							},
 							Env: []v1.EnvVar{
 								{Name: consts.TrialTemplateMetaKeyOfName, Value: "trial-name"},
@@ -86,24 +88,19 @@ func TestGetRunSpecWithHP(t *testing.T) {
 		t.Errorf("ConvertObjectToUnstructured failed: %v", err)
 	}
 
-	tcs := []struct {
-		Instance             *experimentsv1beta1.Experiment
-		ParameterAssignments []commonapiv1beta1.ParameterAssignment
-		expectedRunSpec      *unstructured.Unstructured
-		Err                  bool
-		testDescription      string
+	cases := map[string]struct {
+		instance                       *experimentsv1beta1.Experiment
+		parameterAssignments           []commonapiv1beta1.ParameterAssignment
+		wantRunSpecWithHyperParameters *unstructured.Unstructured
+		wantError                      error
 	}{
-		// Valid run
-		{
-			Instance:             newFakeInstance(),
-			ParameterAssignments: newFakeParameterAssignment(),
-			expectedRunSpec:      expectedRunSpec,
-			Err:                  false,
-			testDescription:      "Run with valid parameters",
+		"Run with valid parameters": {
+			instance:                       newFakeInstance(),
+			parameterAssignments:           newFakeParameterAssignment(),
+			wantRunSpecWithHyperParameters: expectedRunSpec,
 		},
-		// Invalid JSON in unstructured
-		{
-			Instance: func() *experimentsv1beta1.Experiment {
+		"Invalid JSON in Unstructured Trial template": {
+			instance: func() *experimentsv1beta1.Experiment {
 				i := newFakeInstance()
 				trialSpec := i.Spec.TrialTemplate.TrialSource.TrialSpec
 				trialSpec.Object = map[string]interface{}{
@@ -111,25 +108,12 @@ func TestGetRunSpecWithHP(t *testing.T) {
 				}
 				return i
 			}(),
-			ParameterAssignments: newFakeParameterAssignment(),
-			Err:                  true,
-			testDescription:      "Invalid JSON in Trial template",
+			parameterAssignments: newFakeParameterAssignment(),
+			wantError:            errConvertUnstructuredToStringFailed,
 		},
-		// len(parameterAssignment) != len(trialParameters)
-		{
-			Instance: newFakeInstance(),
-			ParameterAssignments: func() []commonapiv1beta1.ParameterAssignment {
-				pa := newFakeParameterAssignment()
-				pa = pa[1:]
-				return pa
-			}(),
-			Err:             true,
-			testDescription: "Number of parameter assignments is not equal to number of Trial parameters",
-		},
-		// Parameter from assignments not found in Trial paramters
-		{
-			Instance: newFakeInstance(),
-			ParameterAssignments: func() []commonapiv1beta1.ParameterAssignment {
+		"Non-meta parameter from TrialParameters not found in ParameterAssignment": {
+			instance: newFakeInstance(),
+			parameterAssignments: func() []commonapiv1beta1.ParameterAssignment {
 				pa := newFakeParameterAssignment()
 				pa[0] = commonapiv1beta1.ParameterAssignment{
 					Name:  "invalid-name",
@@ -137,23 +121,33 @@ func TestGetRunSpecWithHP(t *testing.T) {
 				}
 				return pa
 			}(),
-			Err:             true,
-			testDescription: "Trial parameters don't have parameter from assignments",
+			wantError: errParamNotFoundInParameterAssignment,
+		},
+		// case in which the lengths of trial parameters and parameter assignments are different
+		"Parameter from ParameterAssignment not found in TrialParameters": {
+			instance: newFakeInstance(),
+			parameterAssignments: func() []commonapiv1beta1.ParameterAssignment {
+				pa := newFakeParameterAssignment()
+				pa = append(pa, commonapiv1beta1.ParameterAssignment{
+					Name:  "extra-name",
+					Value: "extra-value",
+				})
+				return pa
+			}(),
+			wantError: errParamNotFoundInTrialParameters,
 		},
 	}
 
-	for _, tc := range tcs {
-		actualRunSpec, err := p.GetRunSpecWithHyperParameters(tc.Instance, "trial-name", "trial-namespace", tc.ParameterAssignments)
-
-		if tc.Err && err == nil {
-			t.Errorf("Case: %v failed. Expected err, got nil", tc.testDescription)
-		} else if !tc.Err {
-			if err != nil {
-				t.Errorf("Case: %v failed. Expected nil, got %v", tc.testDescription, err)
-			} else if !reflect.DeepEqual(tc.expectedRunSpec, actualRunSpec) {
-				t.Errorf("Case: %v failed. Expected %v\n got %v", tc.testDescription, tc.expectedRunSpec.Object, actualRunSpec.Object)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got, err := p.GetRunSpecWithHyperParameters(tc.instance, "trial-name", "trial-namespace", tc.parameterAssignments)
+			if diff := cmp.Diff(tc.wantError, err, cmpopts.EquateErrors()); len(diff) != 0 {
+				t.Errorf("Unexpected error from GetRunSpecWithHyperParameters (-want,+got):\n%s", diff)
 			}
-		}
+			if diff := cmp.Diff(tc.wantRunSpecWithHyperParameters, got); len(diff) != 0 {
+				t.Errorf("Unexpected run spec from GetRunSpecWithHyperParameters (-want,+got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -176,12 +170,14 @@ spec:
     spec:
       containers:
         - name: training-container
-          image: docker.io/kubeflowkatib/mxnet-mnist
+          image: ghcr.io/kubeflow/katib/pytorch-mnist-cpu
           command:
             - "python3"
-            - "/opt/mxnet-mnist/mnist.py"
+            - "/opt/pytorch-mnist/mnist.py"
+            - "--epochs=1"
+            - "--batch-size=16"
             - "--lr=${trialParameters.learningRate}"
-            - "--num-layers=${trialParameters.numberLayers}"`
+            - "--momentum=${trialParameters.momentum}"`
 
 	invalidTrialSpec := `apiVersion: batch/v1
 kind: Job
@@ -190,32 +186,15 @@ spec:
     spec:
       containers:
         - name: training-container
-          image: docker.io/kubeflowkatib/mxnet-mnist
+          image: ghcr.io/kubeflow/katib/pytorch-mnist-cpu
           command:
             - python3
-            - /opt/mxnet-mnist/mnist.py
+            - /opt/pytorch-mnist/mnist.py
+            - --epochs=1
+            - --batch-size=16
             - --lr=${trialParameters.learningRate}
-            - --num-layers=${trialParameters.numberLayers}
+            - --momentum=${trialParameters.momentum}
             - --invalidParameter={'num_layers': 2, 'input_sizes': [32, 32, 3]}`
-
-	validGetConfigMap1 := c.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(
-		map[string]string{templatePath: trialSpec}, nil)
-
-	invalidConfigMapName := c.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(
-		nil, errors.New("Unable to get ConfigMap"))
-
-	validGetConfigMap3 := c.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(
-		map[string]string{templatePath: trialSpec}, nil)
-
-	invalidTemplate := c.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(
-		map[string]string{templatePath: invalidTrialSpec}, nil)
-
-	gomock.InOrder(
-		validGetConfigMap1,
-		invalidConfigMapName,
-		validGetConfigMap3,
-		invalidTemplate,
-	)
 
 	// We can't compare structures, because in ConfigMap trialSpec is a string and creationTimestamp was not added
 	expectedStr := `apiVersion: batch/v1
@@ -228,28 +207,34 @@ spec:
     spec:
       containers:
         - name: training-container
-          image: docker.io/kubeflowkatib/mxnet-mnist
+          image: ghcr.io/kubeflow/katib/pytorch-mnist-cpu
           command:
             - "python3"
-            - "/opt/mxnet-mnist/mnist.py"
+            - "/opt/pytorch-mnist/mnist.py"
+            - "--epochs=1"
+            - "--batch-size=16"
             - "--lr=0.05"
-            - "--num-layers=5"`
+            - "--momentum=0.9"`
 
 	expectedRunSpec, err := util.ConvertStringToUnstructured(expectedStr)
-	if err != nil {
-		t.Errorf("ConvertStringToUnstructured failed: %v", err)
+	if diff := cmp.Diff(nil, err, cmpopts.EquateErrors()); len(diff) != 0 {
+		t.Errorf("ConvertStringToUnstructured failed (-want,+got):\n%s", diff)
 	}
 
-	tcs := []struct {
-		Instance             *experimentsv1beta1.Experiment
-		ParameterAssignments []commonapiv1beta1.ParameterAssignment
-		Err                  bool
-		testDescription      string
+	cases := map[string]struct {
+		mockConfigMapGetter            func() *gomock.Call
+		instance                       *experimentsv1beta1.Experiment
+		parameterAssignments           []commonapiv1beta1.ParameterAssignment
+		wantRunSpecWithHyperParameters *unstructured.Unstructured
+		wantError                      error
 	}{
-		// Valid run
-		// validGetConfigMap1 case
-		{
-			Instance: func() *experimentsv1beta1.Experiment {
+		"Run with valid parameters": {
+			mockConfigMapGetter: func() *gomock.Call {
+				return c.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(
+					map[string]string{templatePath: trialSpec}, nil,
+				)
+			},
+			instance: func() *experimentsv1beta1.Experiment {
 				i := newFakeInstance()
 				i.Spec.TrialTemplate.TrialSource = experimentsv1beta1.TrialSource{
 					ConfigMap: &experimentsv1beta1.ConfigMapSource{
@@ -260,14 +245,16 @@ spec:
 				}
 				return i
 			}(),
-			ParameterAssignments: newFakeParameterAssignment(),
-			Err:                  false,
-			testDescription:      "Run with valid parameters",
+			parameterAssignments:           newFakeParameterAssignment(),
+			wantRunSpecWithHyperParameters: expectedRunSpec,
 		},
-		// Invalid ConfigMap name
-		// invalidConfigMapName case
-		{
-			Instance: func() *experimentsv1beta1.Experiment {
+		"Invalid ConfigMap name": {
+			mockConfigMapGetter: func() *gomock.Call {
+				return c.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(
+					nil, errConfigMapNotFound,
+				)
+			},
+			instance: func() *experimentsv1beta1.Experiment {
 				i := newFakeInstance()
 				i.Spec.TrialTemplate.TrialSource = experimentsv1beta1.TrialSource{
 					ConfigMap: &experimentsv1beta1.ConfigMapSource{
@@ -276,14 +263,16 @@ spec:
 				}
 				return i
 			}(),
-			ParameterAssignments: newFakeParameterAssignment(),
-			Err:                  true,
-			testDescription:      "Invalid ConfigMap name",
+			parameterAssignments: newFakeParameterAssignment(),
+			wantError:            errConfigMapNotFound,
 		},
-		// Invalid template path in ConfigMap name
-		// validGetConfigMap3 case
-		{
-			Instance: func() *experimentsv1beta1.Experiment {
+		"Invalid template path in ConfigMap name": {
+			mockConfigMapGetter: func() *gomock.Call {
+				return c.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(
+					map[string]string{templatePath: trialSpec}, nil,
+				)
+			},
+			instance: func() *experimentsv1beta1.Experiment {
 				i := newFakeInstance()
 				i.Spec.TrialTemplate.TrialSource = experimentsv1beta1.TrialSource{
 					ConfigMap: &experimentsv1beta1.ConfigMapSource{
@@ -294,16 +283,18 @@ spec:
 				}
 				return i
 			}(),
-			ParameterAssignments: newFakeParameterAssignment(),
-			Err:                  true,
-			testDescription:      "Invalid template path in ConfigMap",
+			parameterAssignments: newFakeParameterAssignment(),
+			wantError:            errTrialTemplateNotFound,
 		},
-		// Invalid Trial template spec in ConfigMap
 		// Trial template is a string in ConfigMap
 		// Because of that, user can specify not valid unstructured template
-		// invalidTemplate case
-		{
-			Instance: func() *experimentsv1beta1.Experiment {
+		"Invalid trial spec in ConfigMap": {
+			mockConfigMapGetter: func() *gomock.Call {
+				return c.EXPECT().GetConfigMap(gomock.Any(), gomock.Any()).Return(
+					map[string]string{templatePath: invalidTrialSpec}, nil,
+				)
+			},
+			instance: func() *experimentsv1beta1.Experiment {
 				i := newFakeInstance()
 				i.Spec.TrialTemplate.TrialSource = experimentsv1beta1.TrialSource{
 					ConfigMap: &experimentsv1beta1.ConfigMapSource{
@@ -314,23 +305,22 @@ spec:
 				}
 				return i
 			}(),
-			ParameterAssignments: newFakeParameterAssignment(),
-			Err:                  true,
-			testDescription:      "Invalid Trial spec in ConfigMap",
+			parameterAssignments: newFakeParameterAssignment(),
+			wantError:            errConvertStringToUnstructuredFailed,
 		},
 	}
 
-	for _, tc := range tcs {
-		actualRunSpec, err := p.GetRunSpecWithHyperParameters(tc.Instance, "trial-name", "trial-namespace", tc.ParameterAssignments)
-		if tc.Err && err == nil {
-			t.Errorf("Case: %v failed. Expected err, got nil", tc.testDescription)
-		} else if !tc.Err {
-			if err != nil {
-				t.Errorf("Case: %v failed. Expected nil, got %v", tc.testDescription, err)
-			} else if !reflect.DeepEqual(expectedRunSpec, actualRunSpec) {
-				t.Errorf("Case: %v failed. Expected %v\n got %v", tc.testDescription, expectedRunSpec.Object, actualRunSpec.Object)
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			tc.mockConfigMapGetter()
+			got, err := p.GetRunSpecWithHyperParameters(tc.instance, "trial-name", "trial-namespace", tc.parameterAssignments)
+			if diff := cmp.Diff(tc.wantError, err, cmpopts.EquateErrors()); len(diff) != 0 {
+				t.Errorf("Unexpected error from GetRunSpecWithHyperParameters (-want,+got):\n%s", diff)
 			}
-		}
+			if diff := cmp.Diff(tc.wantRunSpecWithHyperParameters, got); len(diff) != 0 {
+				t.Errorf("Unexpected run spec from GetRunSpecWithHyperParameters (-want,+got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -347,12 +337,14 @@ func newFakeInstance() *experimentsv1beta1.Experiment {
 					Containers: []v1.Container{
 						{
 							Name:  "training-container",
-							Image: "docker.io/kubeflowkatib/mxnet-mnist",
+							Image: "ghcr.io/kubeflow/katib/pytorch-mnist-cpu",
 							Command: []string{
 								"python3",
-								"/opt/mxnet-mnist/mnist.py",
+								"/opt/pytorch-mnist/mnist.py",
+								"--epochs=1",
+								"--batch-size=16",
 								"--lr=${trialParameters.learningRate}",
-								"--num-layers=${trialParameters.numberLayers}",
+								"--momentum=${trialParameters.momentum}",
 							},
 							Env: []v1.EnvVar{
 								{Name: consts.TrialTemplateMetaKeyOfName, Value: "${trialParameters.trialName}"},
@@ -381,9 +373,9 @@ func newFakeInstance() *experimentsv1beta1.Experiment {
 						Reference:   "lr",
 					},
 					{
-						Name:        "numberLayers",
-						Description: "Number of layers",
-						Reference:   "num-layers",
+						Name:        "momentum",
+						Description: "Momentum for the training model",
+						Reference:   "momentum",
 					},
 					{
 						Name:        "trialName",
@@ -418,8 +410,8 @@ func newFakeParameterAssignment() []commonapiv1beta1.ParameterAssignment {
 			Value: "0.05",
 		},
 		{
-			Name:  "num-layers",
-			Value: "5",
+			Name:  "momentum",
+			Value: "0.9",
 		},
 	}
 }

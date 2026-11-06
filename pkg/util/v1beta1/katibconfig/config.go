@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,318 +18,158 @@ package katibconfig
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
+	"fmt"
+	"os"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/runtime/serializer"
 	apitypes "k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	configv1beta1 "github.com/kubeflow/katib/pkg/apis/config/v1beta1"
 	common "github.com/kubeflow/katib/pkg/apis/controller/common/v1beta1"
 	"github.com/kubeflow/katib/pkg/controller.v1beta1/consts"
 )
 
-// SuggestionConfig is the JSON suggestion structure in Katib config.
-type SuggestionConfig struct {
-	Image                     string                           `json:"image"`
-	ImagePullPolicy           corev1.PullPolicy                `json:"imagePullPolicy,omitempty"`
-	Resource                  corev1.ResourceRequirements      `json:"resources,omitempty"`
-	ServiceAccountName        string                           `json:"serviceAccountName,omitempty"`
-	VolumeMountPath           string                           `json:"volumeMountPath,omitempty"`
-	PersistentVolumeClaimSpec corev1.PersistentVolumeClaimSpec `json:"persistentVolumeClaimSpec,omitempty"`
-	PersistentVolumeSpec      corev1.PersistentVolumeSpec      `json:"persistentVolumeSpec,omitempty"`
-}
+var (
+	ErrKatibConfigNil         = fmt.Errorf("failed to parse katib-config.yaml in ConfigMap: %s", consts.KatibConfigMapName)
+	ErrInvalidGVKFormat       = errors.New("invalid GroupVersionKinds")
+	ErrTrialResourcesAreEmpty = errors.New("trialResources are empty")
+)
 
-// MetricsCollectorConfig is the JSON metrics collector structure in Katib config.
-type MetricsCollectorConfig struct {
-	Image            string                      `json:"image"`
-	ImagePullPolicy  corev1.PullPolicy           `json:"imagePullPolicy,omitempty"`
-	Resource         corev1.ResourceRequirements `json:"resources,omitempty"`
-	WaitAllProcesses *bool                       `json:"waitAllProcesses,omitempty"`
-}
-
-// EarlyStoppingConfig is the JSON early stopping structure in Katib config.
-type EarlyStoppingConfig struct {
-	Image           string            `json:"image"`
-	ImagePullPolicy corev1.PullPolicy `json:"imagePullPolicy,omitempty"`
+func TrialResourcesToGVKs(trialResources []string) ([]schema.GroupVersionKind, error) {
+	if len(trialResources) == 0 {
+		return nil, ErrTrialResourcesAreEmpty
+	}
+	gvks := make([]schema.GroupVersionKind, 0, len(trialResources))
+	for i := range trialResources {
+		gvk, _ := schema.ParseKindArg(trialResources[i])
+		if gvk == nil {
+			return nil, ErrInvalidGVKFormat
+		}
+		gvks = append(gvks, *gvk)
+	}
+	return gvks, nil
 }
 
 // GetSuggestionConfigData gets the config data for the given suggestion algorithm name.
-func GetSuggestionConfigData(algorithmName string, client client.Client) (SuggestionConfig, error) {
-	configMap := &corev1.ConfigMap{}
-	suggestionConfigData := SuggestionConfig{}
-	err := client.Get(
-		context.TODO(),
-		apitypes.NamespacedName{Name: consts.KatibConfigMapName, Namespace: consts.DefaultKatibNamespace},
-		configMap)
-	if err != nil {
-		return SuggestionConfig{}, err
-	}
-
-	// Try to find suggestion data in config map
-	config, ok := configMap.Data[consts.LabelSuggestionTag]
-	if !ok {
-		return SuggestionConfig{}, errors.New("Failed to find suggestions config in ConfigMap: " + consts.KatibConfigMapName)
-	}
-
-	// Parse suggestion data to map where key = algorithm name, value = SuggestionConfig
-	suggestionsConfig := map[string]SuggestionConfig{}
-	if err := json.Unmarshal([]byte(config), &suggestionsConfig); err != nil {
-		return SuggestionConfig{}, err
+func GetSuggestionConfigData(algorithmName string, client client.Client) (configv1beta1.SuggestionConfig, error) {
+	katibCfg := &configv1beta1.KatibConfig{}
+	if err := fromConfigMap(katibCfg, client); err != nil {
+		return configv1beta1.SuggestionConfig{}, err
 	}
 
 	// Try to find SuggestionConfig for the algorithm
-	suggestionConfigData, ok = suggestionsConfig[algorithmName]
-	if !ok {
-		return SuggestionConfig{}, errors.New("Failed to find suggestion config for algorithm: " + algorithmName + " in ConfigMap: " + consts.KatibConfigMapName)
+	var suggestionConfigData *configv1beta1.SuggestionConfig
+	for i := range katibCfg.RuntimeConfig.SuggestionConfigs {
+		if katibCfg.RuntimeConfig.SuggestionConfigs[i].AlgorithmName == algorithmName {
+			suggestionConfigData = &katibCfg.RuntimeConfig.SuggestionConfigs[i]
+		}
+	}
+	if suggestionConfigData == nil {
+		return configv1beta1.SuggestionConfig{}, fmt.Errorf("failed to find suggestion config for algorithm: %s in ConfigMap: %s", algorithmName, consts.KatibConfigMapName)
 	}
 
 	// Get image from config
 	image := suggestionConfigData.Image
 	if strings.TrimSpace(image) == "" {
-		return SuggestionConfig{}, errors.New("Required value for image configuration of algorithm name: " + algorithmName)
+		return configv1beta1.SuggestionConfig{}, fmt.Errorf("required value for image configuration of algorithm name: %s", algorithmName)
 	}
-
-	// Get Image Pull Policy
-	imagePullPolicy := suggestionConfigData.ImagePullPolicy
-	if imagePullPolicy != corev1.PullAlways && imagePullPolicy != corev1.PullIfNotPresent && imagePullPolicy != corev1.PullNever {
-		suggestionConfigData.ImagePullPolicy = consts.DefaultImagePullPolicy
-	}
-
-	// Set resource requirements for suggestion
-	suggestionConfigData.Resource = setResourceRequirements(suggestionConfigData.Resource)
-
-	// Set default suggestion container volume mount path
-	if suggestionConfigData.VolumeMountPath == "" {
-		suggestionConfigData.VolumeMountPath = consts.DefaultContainerSuggestionVolumeMountPath
-	}
-
-	// Get persistent volume claim spec from config
-	pvcSpec := suggestionConfigData.PersistentVolumeClaimSpec
-
-	// Set default storage class
-	defaultStorageClassName := consts.DefaultSuggestionStorageClassName
-	if pvcSpec.StorageClassName == nil {
-		pvcSpec.StorageClassName = &defaultStorageClassName
-	}
-
-	// Set default access modes
-	if len(pvcSpec.AccessModes) == 0 {
-		pvcSpec.AccessModes = []corev1.PersistentVolumeAccessMode{
-			consts.DefaultSuggestionVolumeAccessMode,
-		}
-	}
-
-	// Set default resources
-	defaultVolumeStorage, _ := resource.ParseQuantity(consts.DefaultSuggestionVolumeStorage)
-	if len(pvcSpec.Resources.Requests) == 0 {
-
-		pvcSpec.Resources.Requests = make(map[corev1.ResourceName]resource.Quantity)
-		pvcSpec.Resources.Requests[corev1.ResourceStorage] = defaultVolumeStorage
-	}
-
-	// Set pvc back for suggestion config
-	suggestionConfigData.PersistentVolumeClaimSpec = pvcSpec
-
-	// Get pv from config only if pvc storage class name = DefaultSuggestionStorageClassName
-	if *pvcSpec.StorageClassName == consts.DefaultSuggestionStorageClassName {
-		pvSpec := suggestionConfigData.PersistentVolumeSpec
-
-		// Set default storage class
-		pvSpec.StorageClassName = defaultStorageClassName
-
-		// Set PersistentVolumeReclaimPolicy to "Delete" to automatically delete PV once PVC is deleted.
-		// Kubernetes doesn't allow to specify ownerReferences for the cluster-scoped
-		// resources (which PV is) with namespace-scoped owner (which Suggestion is).
-		pvSpec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimDelete
-
-		// Set default access modes
-		if len(pvSpec.AccessModes) == 0 {
-			pvSpec.AccessModes = []corev1.PersistentVolumeAccessMode{
-				consts.DefaultSuggestionVolumeAccessMode,
-			}
-		}
-
-		// Set default pv source.
-		// In composer we add name, algorithm and namespace to host path.
-		if pvSpec.PersistentVolumeSource == (corev1.PersistentVolumeSource{}) {
-			pvSpec.PersistentVolumeSource = corev1.PersistentVolumeSource{
-				HostPath: &corev1.HostPathVolumeSource{
-					Path: consts.DefaultSuggestionVolumeLocalPathPrefix,
-				},
-			}
-		}
-
-		// Set default local path if it is empty
-		if pvSpec.PersistentVolumeSource.HostPath != nil && pvSpec.PersistentVolumeSource.HostPath.Path == "" {
-			pvSpec.PersistentVolumeSource.HostPath.Path = consts.DefaultSuggestionVolumeLocalPathPrefix
-		}
-
-		// Set default capacity
-		if len(pvSpec.Capacity) == 0 {
-			pvSpec.Capacity = make(map[corev1.ResourceName]resource.Quantity)
-			pvSpec.Capacity[corev1.ResourceStorage] = defaultVolumeStorage
-		}
-
-		// Set pv back for suggestion config
-		suggestionConfigData.PersistentVolumeSpec = pvSpec
-
-	}
-
-	return suggestionConfigData, nil
+	return *suggestionConfigData, nil
 }
 
 // GetEarlyStoppingConfigData gets the config data for the given early stopping algorithm name.
-func GetEarlyStoppingConfigData(algorithmName string, client client.Client) (EarlyStoppingConfig, error) {
-	configMap := &corev1.ConfigMap{}
-	earlyStoppingConfigData := EarlyStoppingConfig{}
-	err := client.Get(
-		context.TODO(),
-		apitypes.NamespacedName{Name: consts.KatibConfigMapName, Namespace: consts.DefaultKatibNamespace},
-		configMap)
-	if err != nil {
-		return EarlyStoppingConfig{}, err
+func GetEarlyStoppingConfigData(algorithmName string, client client.Client) (configv1beta1.EarlyStoppingConfig, error) {
+	katibCfg := &configv1beta1.KatibConfig{}
+	if err := fromConfigMap(katibCfg, client); err != nil {
+		return configv1beta1.EarlyStoppingConfig{}, err
 	}
 
-	// Try to find early stopping data in config map.
-	config, ok := configMap.Data[consts.LabelEarlyStoppingTag]
-	if !ok {
-		return EarlyStoppingConfig{}, errors.New("Failed to find early stopping config in ConfigMap: " + consts.KatibConfigMapName)
+	// Try to find EarlyStoppingConfig for the algorithm
+	var earlyStoppingConfigData *configv1beta1.EarlyStoppingConfig
+	for i := range katibCfg.RuntimeConfig.EarlyStoppingConfigs {
+		if katibCfg.RuntimeConfig.EarlyStoppingConfigs[i].AlgorithmName == algorithmName {
+			earlyStoppingConfigData = &katibCfg.RuntimeConfig.EarlyStoppingConfigs[i]
+		}
 	}
-
-	// Parse early stopping data to map where key = algorithm name, value = EarlyStoppingConfig.
-	earlyStoppingsConfig := map[string]EarlyStoppingConfig{}
-	if err := json.Unmarshal([]byte(config), &earlyStoppingsConfig); err != nil {
-		return EarlyStoppingConfig{}, err
-	}
-
-	// Try to find EarlyStoppingConfig for the algorithm.
-	earlyStoppingConfigData, ok = earlyStoppingsConfig[algorithmName]
-	if !ok {
-		return EarlyStoppingConfig{}, errors.New("Failed to find early stopping config for algorithm: " + algorithmName + " in ConfigMap: " + consts.KatibConfigMapName)
+	if earlyStoppingConfigData == nil {
+		return configv1beta1.EarlyStoppingConfig{}, fmt.Errorf("failed to find early stopping config for algorithm: %s in ConfigMap: %s", algorithmName, consts.KatibConfigMapName)
 	}
 
 	// Get image from config.
 	image := earlyStoppingConfigData.Image
 	if strings.TrimSpace(image) == "" {
-		return EarlyStoppingConfig{}, errors.New("Required value for image configuration of algorithm name: " + algorithmName)
+		return configv1beta1.EarlyStoppingConfig{}, fmt.Errorf("required value for image configuration of algorithm name: %s", algorithmName)
 	}
 
-	// Get Image Pull Policy.
-	imagePullPolicy := earlyStoppingConfigData.ImagePullPolicy
-	if imagePullPolicy != corev1.PullAlways && imagePullPolicy != corev1.PullIfNotPresent && imagePullPolicy != corev1.PullNever {
-		earlyStoppingConfigData.ImagePullPolicy = consts.DefaultImagePullPolicy
-	}
-
-	return earlyStoppingConfigData, nil
+	return *earlyStoppingConfigData, nil
 }
 
 // GetMetricsCollectorConfigData gets the config data for the given collector kind.
-func GetMetricsCollectorConfigData(cKind common.CollectorKind, client client.Client) (MetricsCollectorConfig, error) {
-	configMap := &corev1.ConfigMap{}
-	metricsCollectorConfigData := MetricsCollectorConfig{}
-	err := client.Get(
-		context.TODO(),
-		apitypes.NamespacedName{Name: consts.KatibConfigMapName, Namespace: consts.DefaultKatibNamespace},
-		configMap)
-	if err != nil {
-		return MetricsCollectorConfig{}, err
-	}
-
-	// Try to find metrics collector data in config map
-	config, ok := configMap.Data[consts.LabelMetricsCollectorSidecar]
-	if !ok {
-		return MetricsCollectorConfig{}, errors.New("Failed to find metrics collector config in ConfigMap: " + consts.KatibConfigMapName)
-	}
-	// Parse metrics collector data to map where key = collector kind, value = MetricsCollectorConfig
-	kind := string(cKind)
-	mcsConfig := map[string]MetricsCollectorConfig{}
-	if err := json.Unmarshal([]byte(config), &mcsConfig); err != nil {
-		return MetricsCollectorConfig{}, err
+func GetMetricsCollectorConfigData(cKind common.CollectorKind, client client.Client) (configv1beta1.MetricsCollectorConfig, error) {
+	katibCfg := &configv1beta1.KatibConfig{}
+	if err := fromConfigMap(katibCfg, client); err != nil {
+		return configv1beta1.MetricsCollectorConfig{}, err
 	}
 
 	// Try to find MetricsCollectorConfig for the collector kind
-	metricsCollectorConfigData, ok = mcsConfig[kind]
-	if !ok {
-		return MetricsCollectorConfig{}, errors.New("Failed to find metrics collector config for kind: " + kind + " in ConfigMap: " + consts.KatibConfigMapName)
+	var metricsCollectorConfigData *configv1beta1.MetricsCollectorConfig
+	kind := string(cKind)
+	for i := range katibCfg.RuntimeConfig.MetricsCollectorConfigs {
+		if katibCfg.RuntimeConfig.MetricsCollectorConfigs[i].CollectorKind == kind {
+			metricsCollectorConfigData = &katibCfg.RuntimeConfig.MetricsCollectorConfigs[i]
+		}
+	}
+	if metricsCollectorConfigData == nil {
+		return configv1beta1.MetricsCollectorConfig{}, fmt.Errorf("failed to find metrics collector config for kind: %s in ConfigMap: %s", kind, consts.KatibConfigMapName)
 	}
 
 	// Get image from config
 	image := metricsCollectorConfigData.Image
 	if strings.TrimSpace(image) == "" {
-		return MetricsCollectorConfig{}, errors.New("Required value for image configuration of metrics collector kind: " + kind)
+		return configv1beta1.MetricsCollectorConfig{}, fmt.Errorf("required value for image configuration of metrics collector kind: %s", kind)
 	}
 
-	// Get Image Pull Policy
-	imagePullPolicy := metricsCollectorConfigData.ImagePullPolicy
-	if imagePullPolicy != corev1.PullAlways && imagePullPolicy != corev1.PullIfNotPresent && imagePullPolicy != corev1.PullNever {
-		metricsCollectorConfigData.ImagePullPolicy = consts.DefaultImagePullPolicy
-	}
-
-	// Set resource requirements for metrics collector
-	metricsCollectorConfigData.Resource = setResourceRequirements(metricsCollectorConfigData.Resource)
-
-	return metricsCollectorConfigData, nil
+	return *metricsCollectorConfigData, nil
 }
 
-func setResourceRequirements(configResource corev1.ResourceRequirements) corev1.ResourceRequirements {
+// GetInitConfigData gets the init config data.
+func GetInitConfigData(scheme *runtime.Scheme, katibCfgPath string) (configv1beta1.InitConfig, error) {
+	var katibCfg configv1beta1.KatibConfig
+	if err := fromFile(scheme, &katibCfg, katibCfgPath); err != nil {
+		return configv1beta1.InitConfig{}, fmt.Errorf("%w: %s", ErrKatibConfigNil, err.Error())
+	}
+	return katibCfg.InitConfig, nil
+}
 
-	// If requests are empty create new map
-	if len(configResource.Requests) == 0 {
-		configResource.Requests = make(map[corev1.ResourceName]resource.Quantity)
+func fromFile(scheme *runtime.Scheme, katibConfig *configv1beta1.KatibConfig, katibConfigPath string) error {
+	if len(katibConfigPath) == 0 {
+		scheme.Default(katibConfig)
+		return nil
 	}
+	config, err := os.ReadFile(katibConfigPath)
+	if err != nil {
+		return err
+	}
+	codecs := serializer.NewCodecFactory(scheme)
+	return runtime.DecodeInto(codecs.UniversalDecoder(), config, katibConfig)
+}
 
-	// Get CPU, Memory and Disk Requests from config
-	cpuRequest := configResource.Requests[corev1.ResourceCPU]
-	memRequest := configResource.Requests[corev1.ResourceMemory]
-	diskRequest := configResource.Requests[corev1.ResourceEphemeralStorage]
-
-	// If resource is empty set default value for CPU, Memory, Disk
-	if cpuRequest.IsZero() {
-		defaultCPURequest, _ := resource.ParseQuantity(consts.DefaultCPURequest)
-		configResource.Requests[corev1.ResourceCPU] = defaultCPURequest
+func fromConfigMap(katibConfig *configv1beta1.KatibConfig, client client.Client) error {
+	configMap := &corev1.ConfigMap{}
+	err := client.Get(context.TODO(), apitypes.NamespacedName{Name: consts.KatibConfigMapName, Namespace: consts.DefaultKatibNamespace}, configMap)
+	if err != nil {
+		return err
 	}
-	if memRequest.IsZero() {
-		defaultMemRequest, _ := resource.ParseQuantity(consts.DefaultMemRequest)
-		configResource.Requests[corev1.ResourceMemory] = defaultMemRequest
+	// Try to find katib-config.yaml data in configMap.
+	config, ok := configMap.Data[consts.LabelKatibConfigTag]
+	if !ok {
+		return fmt.Errorf("failed to find katib-config.yaml in ConfigMap: %s", consts.KatibConfigMapName)
 	}
-	if diskRequest.IsZero() {
-		defaultDiskRequest, _ := resource.ParseQuantity(consts.DefaultDiskRequest)
-		configResource.Requests[corev1.ResourceEphemeralStorage] = defaultDiskRequest
-	}
-
-	// If limits are empty create new map
-	if len(configResource.Limits) == 0 {
-		configResource.Limits = make(map[corev1.ResourceName]resource.Quantity)
-	}
-
-	// Get CPU, Memory and Disk Limits from config
-	cpuLimit := configResource.Limits[corev1.ResourceCPU]
-	memLimit := configResource.Limits[corev1.ResourceMemory]
-	diskLimit := configResource.Limits[corev1.ResourceEphemeralStorage]
-
-	// If limit is empty set default value for CPU, Memory, Disk
-	if cpuLimit.IsZero() {
-		defaultCPULimit, _ := resource.ParseQuantity(consts.DefaultCPULimit)
-		configResource.Limits[corev1.ResourceCPU] = defaultCPULimit
-	}
-	if memLimit.IsZero() {
-		defaultMemLimit, _ := resource.ParseQuantity(consts.DefaultMemLimit)
-		configResource.Limits[corev1.ResourceMemory] = defaultMemLimit
-	}
-	if diskLimit.IsZero() {
-		defaultDiskLimit, _ := resource.ParseQuantity(consts.DefaultDiskLimit)
-		configResource.Limits[corev1.ResourceEphemeralStorage] = defaultDiskLimit
-	}
-
-	// If user explicitly sets ephemeral-storage value to something negative, nuke it.
-	// This enables compability with the GKE nodepool autoscalers, which cannot scale
-	// pods which define ephemeral-storage resource constraints.
-	if diskLimit.Sign() == -1 && diskRequest.Sign() == -1 {
-		delete(configResource.Limits, corev1.ResourceEphemeralStorage)
-		delete(configResource.Requests, corev1.ResourceEphemeralStorage)
-	}
-	return configResource
+	codecs := serializer.NewCodecFactory(client.Scheme())
+	return runtime.DecodeInto(codecs.UniversalDecoder(), []byte(config), katibConfig)
 }

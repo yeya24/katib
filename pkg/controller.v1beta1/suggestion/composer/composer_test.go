@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,7 +18,6 @@ package composer
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	stdlog "log"
 	"os"
@@ -44,19 +43,23 @@ import (
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/yaml"
 
+	configv1beta1 "github.com/kubeflow/katib/pkg/apis/config/v1beta1"
 	apis "github.com/kubeflow/katib/pkg/apis/controller"
 	commonv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/common/v1beta1"
 	experimentsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/experiments/v1beta1"
 	suggestionsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/suggestions/v1beta1"
 	trialsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/trials/v1beta1"
 	"github.com/kubeflow/katib/pkg/controller.v1beta1/consts"
-	"github.com/kubeflow/katib/pkg/util/v1beta1/katibconfig"
 )
 
 var (
 	cfg     *rest.Config
 	timeout = time.Second * 40
+	ctx     context.Context
+	cancel  context.CancelFunc
 
 	suggestionName         = "test-suggestion"
 	suggestionAlgorithm    = "random"
@@ -69,15 +72,15 @@ var (
 	}
 
 	deploymentLabels = map[string]string{
-		"custom-label": "test",
-		"deployment":   suggestionName + "-" + suggestionAlgorithm,
-		"experiment":   suggestionName,
-		"suggestion":   suggestionName,
+		"custom-label":                     "test",
+		consts.LabelDeploymentName:         suggestionName + "-" + suggestionAlgorithm,
+		consts.LabelExperimentName:         suggestionName,
+		consts.LabelSuggestionName:         suggestionName,
+		consts.LabelIstioSidecarInjectName: consts.LabelIstioSidecarInjectValue,
 	}
 
 	podAnnotations = map[string]string{
-		"custom-annotation":       "test",
-		"sidecar.istio.io/inject": "false",
+		"custom-annotation": "test",
 	}
 
 	namespace       = "kubeflow"
@@ -92,40 +95,52 @@ var (
 
 	refFlag bool = true
 
-	storageClassName = consts.DefaultSuggestionStorageClassName
+	storageClassName = "test-storage-class"
+	pvLabels         = map[string]string{"type": "local"}
 )
 
 func TestMain(m *testing.M) {
+	// To avoid the `timeout waiting for process kube-apiserver to stop` error,
+	// we must use the `context.WithCancel`.
+	// Ref: https://github.com/kubernetes-sigs/controller-runtime/issues/1571#issuecomment-945535598
+	ctx, cancel = context.WithCancel(context.TODO())
+
 	// Start test k8s server
 	t := &envtest.Environment{
 		CRDDirectoryPaths: []string{
 			filepath.Join("..", "..", "..", "..", "manifests", "v1beta1", "components", "crd"),
 		},
 	}
-	apis.AddToScheme(scheme.Scheme)
-
 	var err error
+	if err = apis.AddToScheme(scheme.Scheme); err != nil {
+		stdlog.Fatal(err)
+	}
+
 	if cfg, err = t.Start(); err != nil {
 		stdlog.Fatal(err)
 	}
 
 	code := m.Run()
-	t.Stop()
+	cancel()
+	if err = t.Stop(); err != nil {
+		stdlog.Fatal(err)
+	}
 	os.Exit(code)
 }
 
 func TestDesiredDeployment(t *testing.T) {
 	g := gomega.NewGomegaWithT(t)
 
-	mgr, err := manager.New(cfg, manager.Options{MetricsBindAddress: "0"})
+	mgr, err := manager.New(cfg, manager.Options{Metrics: metricsserver.Options{BindAddress: "0"}})
 	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(configv1beta1.AddToScheme(mgr.GetScheme())).NotTo(gomega.HaveOccurred())
 
 	// Start test manager.
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		g.Expect(mgr.Start(context.TODO())).NotTo(gomega.HaveOccurred())
+		g.Expect(mgr.Start(ctx)).NotTo(gomega.HaveOccurred())
 	}()
 
 	c := mgr.GetClient()
@@ -136,7 +151,7 @@ func TestDesiredDeployment(t *testing.T) {
 			Name: namespace,
 		},
 	}
-	g.Expect(c.Create(context.TODO(), kubeflowNS)).NotTo(gomega.HaveOccurred())
+	g.Expect(c.Create(ctx, kubeflowNS)).NotTo(gomega.HaveOccurred())
 
 	tcs := []struct {
 		suggestion         *suggestionsv1beta1.Suggestion
@@ -162,12 +177,13 @@ func TestDesiredDeployment(t *testing.T) {
 			suggestion: newFakeSuggestion(),
 			configMap: func() *corev1.ConfigMap {
 				cm := newFakeKatibConfig(newFakeSuggestionConfig(), newFakeEarlyStoppingConfig())
-				cm.Data["suggestion"] = strings.ReplaceAll(cm.Data["suggestion"], string(imagePullPolicy), "invalid")
+				cm.Data[consts.LabelKatibConfigTag] = strings.ReplaceAll(cm.Data[consts.LabelKatibConfigTag], string(imagePullPolicy), "invalid")
 				return cm
 			}(),
 			expectedDeployment: func() *appsv1.Deployment {
 				deploy := newFakeDeployment()
-				deploy.Spec.Template.Spec.Containers[0].ImagePullPolicy = corev1.PullIfNotPresent
+				deploy.Spec.Template.Spec.Containers[0].ImagePullPolicy = configv1beta1.DefaultImagePullPolicy
+				deploy.Spec.Template.Spec.Containers[1].ImagePullPolicy = configv1beta1.DefaultImagePullPolicy
 				return deploy
 			}(),
 			err:             false,
@@ -177,7 +193,7 @@ func TestDesiredDeployment(t *testing.T) {
 			suggestion: newFakeSuggestion(),
 			configMap: func() *corev1.ConfigMap {
 				cm := newFakeKatibConfig(newFakeSuggestionConfig(), newFakeEarlyStoppingConfig())
-				cm.Data["suggestion"] = strings.ReplaceAll(cm.Data["suggestion"], cpu, "invalid")
+				cm.Data[consts.LabelKatibConfigTag] = strings.ReplaceAll(cm.Data[consts.LabelKatibConfigTag], cpu, "invalid")
 				return cm
 			}(),
 			err:             true,
@@ -232,11 +248,11 @@ func TestDesiredDeployment(t *testing.T) {
 
 	for idx, tc := range tcs {
 		// Create configMap with Katib config
-		g.Expect(c.Create(context.TODO(), tc.configMap)).NotTo(gomega.HaveOccurred())
+		g.Expect(c.Create(ctx, tc.configMap)).NotTo(gomega.HaveOccurred())
 
 		// Wait that Config Map is created
 		g.Eventually(func() error {
-			return c.Get(context.TODO(), types.NamespacedName{Namespace: namespace, Name: configMap}, &corev1.ConfigMap{})
+			return c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: configMap}, &corev1.ConfigMap{})
 		}, timeout).ShouldNot(gomega.HaveOccurred())
 
 		// Get deployment
@@ -264,12 +280,12 @@ func TestDesiredDeployment(t *testing.T) {
 		}
 
 		// Delete configMap with Katib config
-		g.Expect(c.Delete(context.TODO(), tc.configMap)).NotTo(gomega.HaveOccurred())
+		g.Expect(c.Delete(ctx, tc.configMap)).NotTo(gomega.HaveOccurred())
 
 		// Wait that Config Map is deleted
 		g.Eventually(func() bool {
 			return errors.IsNotFound(
-				c.Get(context.TODO(), types.NamespacedName{Namespace: namespace, Name: configMap}, &corev1.ConfigMap{}))
+				c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: configMap}, &corev1.ConfigMap{}))
 		}, timeout).Should(gomega.BeTrue())
 
 	}
@@ -278,7 +294,7 @@ func TestDesiredDeployment(t *testing.T) {
 func TestDesiredService(t *testing.T) {
 	g := gomega.NewGomegaWithT(t)
 
-	mgr, err := manager.New(cfg, manager.Options{MetricsBindAddress: "0"})
+	mgr, err := manager.New(cfg, manager.Options{Metrics: metricsserver.Options{BindAddress: "0"}})
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	composer := New(mgr)
@@ -361,18 +377,18 @@ func TestDesiredService(t *testing.T) {
 }
 
 func TestDesiredVolume(t *testing.T) {
-
 	g := gomega.NewGomegaWithT(t)
 
-	mgr, err := manager.New(cfg, manager.Options{MetricsBindAddress: "0"})
+	mgr, err := manager.New(cfg, manager.Options{Metrics: metricsserver.Options{BindAddress: "0"}})
 	g.Expect(err).NotTo(gomega.HaveOccurred())
+	g.Expect(configv1beta1.AddToScheme(mgr.GetScheme())).NotTo(gomega.HaveOccurred())
 
 	// Start test manager.
 	wg := &sync.WaitGroup{}
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		g.Expect(mgr.Start(context.TODO())).NotTo(gomega.HaveOccurred())
+		g.Expect(mgr.Start(ctx)).NotTo(gomega.HaveOccurred())
 	}()
 
 	c := mgr.GetClient()
@@ -401,117 +417,48 @@ func TestDesiredVolume(t *testing.T) {
 			suggestion:      newFakeSuggestion(),
 			configMap:       newFakeKatibConfig(newFakeSuggestionConfig(), newFakeEarlyStoppingConfig()),
 			expectedPVC:     newFakePVC(),
-			expectedPV:      newFakePV(),
-			err:             false,
-			testDescription: "Desired Volume valid run with default pvc and pv",
-		},
-		{
-			suggestion: newFakeSuggestion(),
-			configMap: func() *corev1.ConfigMap {
-				sc := newFakeSuggestionConfig()
-				storageClass := "custom-storage-class"
-				volumeStorage, _ := resource.ParseQuantity("5Gi")
-
-				sc.PersistentVolumeClaimSpec = corev1.PersistentVolumeClaimSpec{
-					StorageClassName: &storageClass,
-					AccessModes: []corev1.PersistentVolumeAccessMode{
-						corev1.ReadWriteOnce,
-						corev1.ReadOnlyMany,
-					},
-					Resources: corev1.ResourceRequirements{
-						Requests: corev1.ResourceList{
-							corev1.ResourceStorage: volumeStorage,
-						},
-					},
-				}
-				cm := newFakeKatibConfig(sc, newFakeEarlyStoppingConfig())
-				return cm
-			}(),
-			expectedPVC: func() *corev1.PersistentVolumeClaim {
-				pvc := newFakePVC()
-				storageClass := "custom-storage-class"
-				volumeStorage, _ := resource.ParseQuantity("5Gi")
-
-				pvc.Spec.StorageClassName = &storageClass
-				pvc.Spec.AccessModes = append(pvc.Spec.AccessModes, corev1.ReadOnlyMany)
-				pvc.Spec.Resources.Requests[corev1.ResourceStorage] = volumeStorage
-				return pvc
-			}(),
 			expectedPV:      nil,
 			err:             false,
-			testDescription: "Custom PVC with not default storage class",
+			testDescription: "Desired Volume valid run with default PVC",
 		},
 		{
 			suggestion: newFakeSuggestion(),
 			configMap: func() *corev1.ConfigMap {
 				sc := newFakeSuggestionConfig()
-				mode := corev1.PersistentVolumeFilesystem
-				accessModes := []corev1.PersistentVolumeAccessMode{
-					corev1.ReadWriteOnce,
-					corev1.ReadOnlyMany,
-				}
-				volumeStorage, _ := resource.ParseQuantity("10Gi")
 
-				sc.PersistentVolumeClaimSpec = corev1.PersistentVolumeClaimSpec{
-					VolumeMode:  &mode,
-					AccessModes: accessModes,
-				}
+				sc.PersistentVolumeClaimSpec = newFakePVC().Spec
 
-				sc.PersistentVolumeSpec = corev1.PersistentVolumeSpec{
-					VolumeMode:  &mode,
-					AccessModes: accessModes,
-					PersistentVolumeSource: corev1.PersistentVolumeSource{
-						GCEPersistentDisk: &corev1.GCEPersistentDiskVolumeSource{
-							PDName: "pd-name",
-							FSType: "fs-type",
-						},
-					},
-					Capacity: corev1.ResourceList{
-						corev1.ResourceStorage: volumeStorage,
-					},
-				}
+				// Change StorageClass and volume storage.
+				sc.PersistentVolumeClaimSpec.StorageClassName = &storageClassName
+
+				sc.PersistentVolumeSpec = newFakePV().Spec
+				// This policy will be changed to "Delete".
+				sc.PersistentVolumeSpec.PersistentVolumeReclaimPolicy = corev1.PersistentVolumeReclaimRetain
+				sc.PersistentVolumeLabels = pvLabels
+
 				cm := newFakeKatibConfig(sc, newFakeEarlyStoppingConfig())
 				return cm
 			}(),
 			expectedPVC: func() *corev1.PersistentVolumeClaim {
 				pvc := newFakePVC()
-				mode := corev1.PersistentVolumeFilesystem
-
-				pvc.Spec.VolumeMode = &mode
-				pvc.Spec.AccessModes = append(pvc.Spec.AccessModes, corev1.ReadOnlyMany)
+				pvc.Spec.StorageClassName = &storageClassName
 				return pvc
 			}(),
-			expectedPV: func() *corev1.PersistentVolume {
-				pv := newFakePV()
-				mode := corev1.PersistentVolumeFilesystem
-				volumeStorage, _ := resource.ParseQuantity("10Gi")
-
-				pv.Spec.VolumeMode = &mode
-				pv.Spec.AccessModes = append(pv.Spec.AccessModes, corev1.ReadOnlyMany)
-				pv.Spec.PersistentVolumeSource = corev1.PersistentVolumeSource{
-					GCEPersistentDisk: &corev1.GCEPersistentDiskVolumeSource{
-						PDName: "pd-name",
-						FSType: "fs-type",
-					},
-				}
-				pv.Spec.Capacity = corev1.ResourceList{
-					corev1.ResourceStorage: volumeStorage,
-				}
-				return pv
-			}(),
+			expectedPV:      newFakePV(),
 			err:             false,
-			testDescription: "Custom PVC and PV with default storage class",
+			testDescription: "Custom PVC and PV",
 		},
 	}
 
 	for idx, tc := range tcs {
 
 		if tc.configMap != nil {
+			// Create ConfigMap with Katib config
+			g.Expect(c.Create(ctx, tc.configMap)).NotTo(gomega.HaveOccurred())
+
 			// Expect that ConfigMap is created
 			g.Eventually(func() error {
-				// Create ConfigMap with Katib config
-				c.Create(context.TODO(), tc.configMap)
-				return c.Get(context.TODO(), types.NamespacedName{Namespace: namespace, Name: configMap}, &corev1.ConfigMap{})
+				return c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: configMap}, &corev1.ConfigMap{})
 			}, timeout).ShouldNot(gomega.HaveOccurred())
 		}
 
@@ -551,12 +498,12 @@ func TestDesiredVolume(t *testing.T) {
 		}
 
 		if tc.configMap != nil {
+			// Delete ConfigMap with Katib config
+			g.Expect(c.Delete(ctx, tc.configMap)).NotTo(gomega.HaveOccurred())
 			// Expect that ConfigMap is deleted
 			g.Eventually(func() bool {
-				// Delete ConfigMap with Katib config
-				c.Delete(context.TODO(), tc.configMap)
 				return errors.IsNotFound(
-					c.Get(context.TODO(), types.NamespacedName{Namespace: namespace, Name: configMap}, &corev1.ConfigMap{}))
+					c.Get(ctx, types.NamespacedName{Namespace: namespace, Name: configMap}, &corev1.ConfigMap{}))
 			}, timeout).Should(gomega.BeTrue())
 		}
 	}
@@ -565,7 +512,7 @@ func TestDesiredVolume(t *testing.T) {
 func TestDesiredRBAC(t *testing.T) {
 	g := gomega.NewGomegaWithT(t)
 
-	mgr, err := manager.New(cfg, manager.Options{MetricsBindAddress: "0"})
+	mgr, err := manager.New(cfg, manager.Options{Metrics: metricsserver.Options{BindAddress: "0"}})
 	g.Expect(err).NotTo(gomega.HaveOccurred())
 
 	composer := New(mgr)
@@ -696,12 +643,40 @@ func metaEqual(expected, actual metav1.ObjectMeta) bool {
 			len(actual.OwnerReferences) == 0)
 }
 
-func newFakeSuggestionConfig() katibconfig.SuggestionConfig {
+func newFakeSuggestionConfig() configv1beta1.SuggestionConfig {
 	cpuQ, _ := resource.ParseQuantity(cpu)
 	memoryQ, _ := resource.ParseQuantity(memory)
 	diskQ, _ := resource.ParseQuantity(disk)
 
-	return katibconfig.SuggestionConfig{
+	return configv1beta1.SuggestionConfig{
+		AlgorithmName: suggestionAlgorithm,
+		Container: corev1.Container{
+			Image:           image,
+			ImagePullPolicy: imagePullPolicy,
+			Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:              cpuQ,
+					corev1.ResourceMemory:           memoryQ,
+					corev1.ResourceEphemeralStorage: diskQ,
+				},
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:              cpuQ,
+					corev1.ResourceMemory:           memoryQ,
+					corev1.ResourceEphemeralStorage: diskQ,
+				},
+			},
+		},
+		ServiceAccountName: serviceAccount,
+	}
+}
+
+func newFakeEarlyStoppingConfig() configv1beta1.EarlyStoppingConfig {
+	cpuQ, _ := resource.ParseQuantity(cpu)
+	memoryQ, _ := resource.ParseQuantity(memory)
+	diskQ, _ := resource.ParseQuantity(disk)
+
+	return configv1beta1.EarlyStoppingConfig{
+		AlgorithmName:   earlyStoppingAlgorithm,
 		Image:           image,
 		ImagePullPolicy: imagePullPolicy,
 		Resource: corev1.ResourceRequirements{
@@ -716,39 +691,32 @@ func newFakeSuggestionConfig() katibconfig.SuggestionConfig {
 				corev1.ResourceEphemeralStorage: diskQ,
 			},
 		},
-		ServiceAccountName: serviceAccount,
 	}
 }
 
-func newFakeEarlyStoppingConfig() katibconfig.EarlyStoppingConfig {
-	return katibconfig.EarlyStoppingConfig{
-		Image:           image,
-		ImagePullPolicy: imagePullPolicy,
-	}
-}
-
-func newFakeKatibConfig(suggestionConfig katibconfig.SuggestionConfig, earlyStoppingConfig katibconfig.EarlyStoppingConfig) *corev1.ConfigMap {
-
-	jsonConfigSuggestion := map[string]katibconfig.SuggestionConfig{
-		suggestionAlgorithm: suggestionConfig,
-	}
-
-	bSuggestion, _ := json.Marshal(jsonConfigSuggestion)
-
-	jsonConfigEarlyStopping := map[string]katibconfig.EarlyStoppingConfig{
-		earlyStoppingAlgorithm: earlyStoppingConfig,
+func newFakeKatibConfig(suggestionConfig configv1beta1.SuggestionConfig, earlyStoppingConfig configv1beta1.EarlyStoppingConfig) *corev1.ConfigMap {
+	katibConfig := configv1beta1.KatibConfig{
+		RuntimeConfig: configv1beta1.RuntimeConfig{
+			SuggestionConfigs: []configv1beta1.SuggestionConfig{
+				suggestionConfig,
+			},
+			EarlyStoppingConfigs: []configv1beta1.EarlyStoppingConfig{
+				earlyStoppingConfig,
+			},
+		},
 	}
 
-	bEarlyStopping, _ := json.Marshal(jsonConfigEarlyStopping)
-
+	bKatibConfig, err := yaml.Marshal(katibConfig)
+	if err != nil {
+		stdlog.Fatal(err)
+	}
 	return &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      configMap,
 			Namespace: namespace,
 		},
 		Data: map[string]string{
-			consts.LabelSuggestionTag:    string(bSuggestion),
-			consts.LabelEarlyStoppingTag: string(bEarlyStopping),
+			consts.LabelKatibConfigTag: string(bKatibConfig),
 		},
 	}
 }
@@ -849,26 +817,20 @@ func newFakeContainers() []corev1.Container {
 				},
 			},
 			ReadinessProbe: &corev1.Probe{
-				Handler: corev1.Handler{
-					Exec: &corev1.ExecAction{
-						Command: []string{
-							defaultGRPCHealthCheckProbe,
-							fmt.Sprintf("-addr=:%d", consts.DefaultSuggestionPort),
-							fmt.Sprintf("-service=%s", consts.DefaultGRPCService),
-						},
+				ProbeHandler: corev1.ProbeHandler{
+					GRPC: &corev1.GRPCAction{
+						Port:    consts.DefaultSuggestionPort,
+						Service: &consts.DefaultGRPCService,
 					},
 				},
 				InitialDelaySeconds: defaultInitialDelaySeconds,
 				PeriodSeconds:       defaultPeriodForReady,
 			},
 			LivenessProbe: &corev1.Probe{
-				Handler: corev1.Handler{
-					Exec: &corev1.ExecAction{
-						Command: []string{
-							defaultGRPCHealthCheckProbe,
-							fmt.Sprintf("-addr=:%d", consts.DefaultSuggestionPort),
-							fmt.Sprintf("-service=%s", consts.DefaultGRPCService),
-						},
+				ProbeHandler: corev1.ProbeHandler{
+					GRPC: &corev1.GRPCAction{
+						Port:    consts.DefaultSuggestionPort,
+						Service: &consts.DefaultGRPCService,
 					},
 				},
 				InitialDelaySeconds: defaultInitialDelaySeconds,
@@ -878,7 +840,7 @@ func newFakeContainers() []corev1.Container {
 			VolumeMounts: []corev1.VolumeMount{
 				{
 					Name:      consts.ContainerSuggestionVolumeName,
-					MountPath: consts.DefaultContainerSuggestionVolumeMountPath,
+					MountPath: configv1beta1.DefaultContainerSuggestionVolumeMountPath,
 				},
 			},
 		},
@@ -892,13 +854,25 @@ func newFakeContainers() []corev1.Container {
 					ContainerPort: consts.DefaultEarlyStoppingPort,
 				},
 			},
+			Resources: corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:              cpuQ,
+					corev1.ResourceMemory:           memoryQ,
+					corev1.ResourceEphemeralStorage: diskQ,
+				},
+				Requests: corev1.ResourceList{
+					corev1.ResourceCPU:              cpuQ,
+					corev1.ResourceMemory:           memoryQ,
+					corev1.ResourceEphemeralStorage: diskQ,
+				},
+			},
 		},
 	}
 }
 
 func newFakePVC() *corev1.PersistentVolumeClaim {
 
-	volumeStorage, _ := resource.ParseQuantity(consts.DefaultSuggestionVolumeStorage)
+	volumeStorage, _ := resource.ParseQuantity(configv1beta1.DefaultSuggestionVolumeStorage)
 
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
@@ -915,11 +889,10 @@ func newFakePVC() *corev1.PersistentVolumeClaim {
 			},
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
-			StorageClassName: &storageClassName,
 			AccessModes: []corev1.PersistentVolumeAccessMode{
-				consts.DefaultSuggestionVolumeAccessMode,
+				configv1beta1.DefaultSuggestionVolumeAccessMode,
 			},
-			Resources: corev1.ResourceRequirements{
+			Resources: corev1.VolumeResourceRequirements{
 				Requests: corev1.ResourceList{
 					corev1.ResourceStorage: volumeStorage,
 				},
@@ -930,24 +903,22 @@ func newFakePVC() *corev1.PersistentVolumeClaim {
 
 func newFakePV() *corev1.PersistentVolume {
 	pvName := suggestionName + "-" + suggestionAlgorithm + "-" + namespace
-	volumeStorage, _ := resource.ParseQuantity(consts.DefaultSuggestionVolumeStorage)
+	volumeStorage, _ := resource.ParseQuantity(configv1beta1.DefaultSuggestionVolumeStorage)
 
 	return &corev1.PersistentVolume{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: pvName,
-			Labels: map[string]string{
-				"type": "local",
-			},
+			Name:   pvName,
+			Labels: pvLabels,
 		},
 		Spec: corev1.PersistentVolumeSpec{
 			StorageClassName:              storageClassName,
 			PersistentVolumeReclaimPolicy: corev1.PersistentVolumeReclaimDelete,
 			AccessModes: []corev1.PersistentVolumeAccessMode{
-				consts.DefaultSuggestionVolumeAccessMode,
+				configv1beta1.DefaultSuggestionVolumeAccessMode,
 			},
 			PersistentVolumeSource: corev1.PersistentVolumeSource{
 				HostPath: &corev1.HostPathVolumeSource{
-					Path: consts.DefaultSuggestionVolumeLocalPathPrefix + pvName,
+					Path: "tmp/katib/suggestion" + pvName,
 				},
 			},
 			Capacity: corev1.ResourceList{

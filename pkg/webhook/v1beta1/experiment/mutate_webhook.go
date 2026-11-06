@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,23 +30,15 @@ import (
 // ExperimentDefaulter sets the Experiment default values.
 type ExperimentDefaulter struct {
 	client  client.Client
-	decoder *admission.Decoder
+	decoder admission.Decoder
 }
 
 // NewExperimentDefaulter returns a new Experiment defaulter with the given client.
-func NewExperimentDefaulter(c client.Client) *ExperimentDefaulter {
+func NewExperimentDefaulter(c client.Client, d admission.Decoder) *ExperimentDefaulter {
 	return &ExperimentDefaulter{
-		client: c,
+		client:  c,
+		decoder: d,
 	}
-}
-
-// ExperimentDefaulter implements admission.DecoderInjector.
-// A decoder will be automatically injected.
-
-// InjectDecoder injects the decoder.
-func (e *ExperimentDefaulter) InjectDecoder(d *admission.Decoder) error {
-	e.decoder = d
-	return nil
 }
 
 func (e *ExperimentDefaulter) Handle(ctx context.Context, req admission.Request) admission.Response {

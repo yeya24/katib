@@ -1,6 +1,6 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Copyright 2021 The Kubeflow Authors.
+# Copyright 2022 The Kubeflow Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -20,36 +20,26 @@ set -o pipefail
 
 echo "Generate deepcopy, clientset, listers, informers for the APIs"
 
-if [[ -z "${GOPATH:-}" ]]; then
-    export GOPATH=$(go env GOPATH)
-fi
+CURRENT_DIR=$(dirname "${BASH_SOURCE[0]}")
+KATIB_ROOT=$(realpath "${CURRENT_DIR}/..")
+KATIB_PKG="github.com/kubeflow/katib"
+CODEGEN_PKG=$(go list -m -mod=readonly -f "{{.Dir}}" k8s.io/code-generator)
 
-# Grab code-generator version from go.sum
-CODEGEN_VERSION=$(cd ../../.. && grep 'k8s.io/code-generator' go.sum | awk '{print $2}' | sed 's/\/go.mod//g' | head -1)
-CODEGEN_PKG=$(echo $(go env GOPATH)"/pkg/mod/k8s.io/code-generator@${CODEGEN_VERSION}")
+cd "$CURRENT_DIR/.."
 
-if [[ ! -d ${CODEGEN_PKG} ]]; then
-    echo "${CODEGEN_PKG} is missing. Please run 'go mod download'."
-    exit 0
-fi
+# shellcheck source=/dev/null
+source "${CODEGEN_PKG}/kube_codegen.sh"
 
-echo ">> Using ${CODEGEN_PKG} for the code generator"
+echo "Generating deepcopy and defaults for config.kubeflow.org ..."
+kube::codegen::gen_helpers \
+    --boilerplate "${KATIB_ROOT}/hack/boilerplate/boilerplate.go.txt" \
+    "${KATIB_ROOT}/pkg/apis/config"
 
-# Ensure we can execute.
-chmod +x ${CODEGEN_PKG}/generate-groups.sh
-
-VERSION_LIST=(v1beta1)
-PROJECT_ROOT=${GOPATH}/src/github.com/kubeflow/katib
-
-modules=(experiments suggestions trials common)
-versions=(v1beta1)
-versionStr=$(printf ",%s" "${versions[@]}")
-GROUP_VERSIONS=$(printf "%s:${versionStr:1} " "${modules[@]}")
-
-echo "Generating clients for ${GROUP_VERSIONS} ..."
-${CODEGEN_PKG}/generate-groups.sh \
-    all \
-    github.com/kubeflow/katib/pkg/client/controller \
-    github.com/kubeflow/katib/pkg/apis/controller \
-    "${GROUP_VERSIONS}" \
-    --go-header-file ${PROJECT_ROOT}/hack/boilerplate/boilerplate.go.txt
+echo "Generating clients for v1beta1 ..."
+kube::codegen::gen_client \
+    --boilerplate "${KATIB_ROOT}/hack/boilerplate/boilerplate.go.txt" \
+    --output-dir "${KATIB_ROOT}/pkg/client/controller" \
+    --output-pkg "${KATIB_PKG}/pkg/client/controller" \
+    --with-watch \
+    --with-applyconfig \
+    "${KATIB_ROOT}/pkg/apis/controller"

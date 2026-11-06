@@ -1,4 +1,4 @@
-# Copyright 2021 The Kubeflow Authors.
+# Copyright 2022 The Kubeflow Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,7 +13,9 @@
 # limitations under the License.
 
 import itertools
+
 import numpy as np
+
 from pkg.apis.manager.v1beta1.python import api_pb2
 
 
@@ -25,9 +27,9 @@ class Operation(object):
 
     def get_dict(self):
         opt_dict = dict()
-        opt_dict['opt_id'] = self.opt_id
-        opt_dict['opt_type'] = self.opt_type
-        opt_dict['opt_params'] = self.opt_params
+        opt_dict["opt_id"] = self.opt_id
+        opt_dict["opt_type"] = self.opt_type
+        opt_dict["opt_params"] = self.opt_params
         return opt_dict
 
     def print_op(self, logger):
@@ -66,14 +68,12 @@ class SearchSpace(object):
                     spec_min = int(ispec.feasible_space.min)
                     spec_max = int(ispec.feasible_space.max)
                     spec_step = int(ispec.feasible_space.step)
-                    avail_space[spec_name] = range(
-                        spec_min, spec_max+1, spec_step)
+                    avail_space[spec_name] = range(spec_min, spec_max + 1, spec_step)
                 elif ispec.parameter_type == api_pb2.DOUBLE:
                     spec_min = float(ispec.feasible_space.min)
                     spec_max = float(ispec.feasible_space.max)
                     spec_step = float(ispec.feasible_space.step)
-                    double_list = np.arange(
-                        spec_min, spec_max+spec_step, spec_step)
+                    double_list = np.arange(spec_min, spec_max + spec_step, spec_step)
                     if double_list[-1] > spec_max:
                         del double_list[-1]
                     avail_space[spec_name] = double_list

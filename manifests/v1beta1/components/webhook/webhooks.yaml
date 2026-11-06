@@ -1,3 +1,4 @@
+---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingWebhookConfiguration
 metadata:
@@ -5,12 +6,9 @@ metadata:
 webhooks:
   - name: validator.experiment.katib.kubeflow.org
     sideEffects: None
-    failurePolicy: Ignore
-    # TODO (andreyvelich): Migrate to v1 ?
     admissionReviewVersions:
-      - v1beta1
+      - v1
     clientConfig:
-      caBundle: Cg==
       service:
         name: katib-controller
         namespace: kubeflow
@@ -33,11 +31,9 @@ metadata:
 webhooks:
   - name: defaulter.experiment.katib.kubeflow.org
     sideEffects: None
-    failurePolicy: Ignore
     admissionReviewVersions:
-      - v1beta1
+      - v1
     clientConfig:
-      caBundle: Cg==
       service:
         name: katib-controller
         namespace: kubeflow
@@ -54,18 +50,19 @@ webhooks:
           - experiments
   - name: mutator.pod.katib.kubeflow.org
     sideEffects: None
-    failurePolicy: Ignore
     admissionReviewVersions:
-      - v1beta1
+      - v1
     clientConfig:
-      caBundle: Cg==
       service:
         name: katib-controller
         namespace: kubeflow
         path: /mutate-pod
     namespaceSelector:
       matchLabels:
-        katib-metricscollector-injection: enabled
+        katib.kubeflow.org/metrics-collector-injection: enabled
+    matchConditions:
+      - name: 'exclude-katib-controller'
+        expression: 'request.userInfo.username != "system:serviceaccount:kubeflow:katib-controller"'
     rules:
       - apiGroups:
           - ""

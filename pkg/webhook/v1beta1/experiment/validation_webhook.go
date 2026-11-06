@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -42,26 +42,18 @@ import (
 // ExperimentValidator validates Experiments.
 type ExperimentValidator struct {
 	client  client.Client
-	decoder *admission.Decoder
+	decoder admission.Decoder
 	validator.Validator
 }
 
 // NewExperimentValidator returns a new Experiment validator with the given client.
-func NewExperimentValidator(c client.Client) *ExperimentValidator {
+func NewExperimentValidator(c client.Client, d admission.Decoder) *ExperimentValidator {
 	p := manifest.New(c)
 	return &ExperimentValidator{
 		client:    c,
 		Validator: validator.New(p),
+		decoder:   d,
 	}
-}
-
-// ExperimentValidator implements inject.Decoder.
-// A decoder will be automatically injected.
-
-// InjectDecoder injects the decoder.
-func (v *ExperimentValidator) InjectDecoder(d *admission.Decoder) error {
-	v.decoder = d
-	return nil
 }
 
 func (v *ExperimentValidator) Handle(ctx context.Context, req admission.Request) admission.Response {
@@ -98,7 +90,8 @@ func (v *ExperimentValidator) Handle(ctx context.Context, req admission.Request)
 		return admission.Errored(http.StatusBadRequest, err)
 	}
 
-	err = v.ValidateExperiment(inst, oldInst)
+	allErrs := v.ValidateExperiment(inst, oldInst)
+	err = allErrs.ToAggregate()
 	if err != nil {
 		return admission.Errored(http.StatusBadRequest, err)
 	}

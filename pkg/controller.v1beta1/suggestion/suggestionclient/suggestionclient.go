@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,6 +24,7 @@ import (
 	grpc_retry "github.com/grpc-ecosystem/go-grpc-middleware/retry"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -52,6 +53,11 @@ var (
 	getRPCClientEarlyStopping = func(conn *grpc.ClientConn) suggestionapi.EarlyStoppingClient {
 		return suggestionapi.NewEarlyStoppingClient(conn)
 	}
+
+	callValidatorOpts = []grpc_retry.CallOption{
+		grpc_retry.WithBackoff(grpc_retry.BackoffLinear(consts.DefaultGRPCRetryPeriod)),
+		grpc_retry.WithMax(consts.DefaultGRPCRetryAttempts),
+	}
 )
 
 // SuggestionClient is the interface to communicate with algorithm services.
@@ -60,6 +66,7 @@ type SuggestionClient interface {
 		ts []trialsv1beta1.Trial) error
 
 	ValidateAlgorithmSettings(instance *suggestionsv1beta1.Suggestion, e *experimentsv1beta1.Experiment) error
+	ValidateEarlyStoppingSettings(instance *suggestionsv1beta1.Suggestion, e *experimentsv1beta1.Experiment) error
 }
 
 // General is the implementation for SuggestionClient.
@@ -78,13 +85,13 @@ func (g *General) SyncAssignments(
 	e *experimentsv1beta1.Experiment,
 	ts []trialsv1beta1.Trial) error {
 	logger := log.WithValues("Suggestion", types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()})
-	requestNum := int(instance.Spec.Requests) - int(instance.Status.SuggestionCount)
-	if requestNum <= 0 {
+	currentRequestNum := int(instance.Spec.Requests) - int(instance.Status.SuggestionCount)
+	if currentRequestNum <= 0 {
 		return nil
 	}
 
 	endpoint := util.GetAlgorithmEndpoint(instance)
-	connSuggestion, err := grpc.Dial(endpoint, grpc.WithInsecure())
+	connSuggestion, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return err
 	}
@@ -102,9 +109,10 @@ func (g *General) SyncAssignments(
 		instance.Status.AlgorithmSettings)
 
 	requestSuggestion := &suggestionapi.GetSuggestionsRequest{
-		Experiment:    g.ConvertExperiment(filledE),
-		Trials:        g.ConvertTrials(ts),
-		RequestNumber: int32(requestNum),
+		Experiment:           g.ConvertExperiment(filledE),
+		Trials:               g.ConvertTrials(ts),
+		CurrentRequestNumber: int32(currentRequestNum),
+		TotalRequestNumber:   int32(instance.Spec.Requests),
 	}
 
 	// Get new suggestions
@@ -112,19 +120,18 @@ func (g *General) SyncAssignments(
 	if err != nil {
 		return err
 	}
-	logger.Info("Getting suggestions", "endpoint", endpoint, "response", responseSuggestion,
-		"request", requestSuggestion)
-	if len(responseSuggestion.ParameterAssignments) != requestNum {
+	logger.Info("Getting suggestions", "endpoint", endpoint, "Number of current request parameters", currentRequestNum, "Number of response parameters", len(responseSuggestion.ParameterAssignments))
+	if len(responseSuggestion.ParameterAssignments) != currentRequestNum {
 		err := fmt.Errorf("The response contains unexpected trials")
-		logger.Error(err, "The response contains unexpected trials", "requestNum", requestNum, "response", responseSuggestion)
+		logger.Error(err, "The response contains unexpected trials")
 		return err
 	}
 
 	earlyStoppingRules := []commonapiv1beta1.EarlyStoppingRule{}
 	// If early stopping is set, call GetEarlyStoppingRules after GetSuggestions.
-	if instance.Spec.EarlyStopping != nil && instance.Spec.EarlyStopping.AlgorithmName != "" {
+	if instance.Spec.EarlyStopping != nil {
 		endpoint = util.GetEarlyStoppingEndpoint(instance)
-		connEarlyStopping, err := grpc.Dial(endpoint, grpc.WithInsecure())
+		connEarlyStopping, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()))
 		if err != nil {
 			return err
 		}
@@ -161,14 +168,27 @@ func (g *General) SyncAssignments(
 		}
 	}
 
+	trialAssignments := []suggestionsv1beta1.TrialAssignment{}
 	for _, t := range responseSuggestion.ParameterAssignments {
-		instance.Status.Suggestions = append(instance.Status.Suggestions,
-			suggestionsv1beta1.TrialAssignment{
-				Name:                 fmt.Sprintf("%s-%s", instance.Name, utilrand.String(8)),
-				ParameterAssignments: composeParameterAssignments(t.Assignments),
-				EarlyStoppingRules:   earlyStoppingRules,
-			})
+		var trialName string
+		if t.TrialName != "" {
+			trialName = t.TrialName
+		} else {
+			trialName = fmt.Sprintf("%s-%s", instance.Name, utilrand.String(8))
+		}
+
+		assignment := suggestionsv1beta1.TrialAssignment{
+			Name:                 trialName,
+			ParameterAssignments: composeParameterAssignments(t.Assignments),
+			EarlyStoppingRules:   earlyStoppingRules,
+		}
+		if t.Labels != nil {
+			assignment.Labels = t.Labels
+		}
+		trialAssignments = append(trialAssignments, assignment)
 	}
+
+	instance.Status.Suggestions = append(instance.Status.Suggestions, trialAssignments...)
 	instance.Status.SuggestionCount = int32(len(instance.Status.Suggestions))
 
 	if responseSuggestion.Algorithm != nil {
@@ -182,13 +202,9 @@ func (g *General) ValidateAlgorithmSettings(instance *suggestionsv1beta1.Suggest
 	logger := log.WithValues("Suggestion", types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()})
 	endpoint := util.GetAlgorithmEndpoint(instance)
 
-	callOpts := []grpc_retry.CallOption{
-		grpc_retry.WithBackoff(grpc_retry.BackoffLinear(consts.DefaultGRPCRetryPeriod)),
-		grpc_retry.WithMax(consts.DefaultGRPCRetryAttempts),
-	}
-	conn, err := grpc.Dial(endpoint, grpc.WithInsecure(),
-		grpc.WithStreamInterceptor(grpc_retry.StreamClientInterceptor(callOpts...)),
-		grpc.WithUnaryInterceptor(grpc_retry.UnaryClientInterceptor(callOpts...)),
+	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStreamInterceptor(grpc_retry.StreamClientInterceptor(callValidatorOpts...)),
+		grpc.WithUnaryInterceptor(grpc_retry.UnaryClientInterceptor(callValidatorOpts...)),
 	)
 	if err != nil {
 		return err
@@ -225,7 +241,55 @@ func (g *General) ValidateAlgorithmSettings(instance *suggestionsv1beta1.Suggest
 		logger.Info("Method ValidateAlgorithmSettings not found", "Suggestion service", e.Spec.Algorithm.AlgorithmName)
 		return nil
 	}
-	logger.Info("Algorithm settings validated")
+	logger.Info("Algorithm settings are validated")
+	return nil
+}
+
+// ValidateEarlyStoppingSettings validates if the algorithm specific configurations for early stopping are valid.
+func (g *General) ValidateEarlyStoppingSettings(instance *suggestionsv1beta1.Suggestion, e *experimentsv1beta1.Experiment) error {
+	logger := log.WithValues("EarlyStopping", types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()})
+	endpoint := util.GetEarlyStoppingEndpoint(instance)
+
+	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithStreamInterceptor(grpc_retry.StreamClientInterceptor(callValidatorOpts...)),
+		grpc.WithUnaryInterceptor(grpc_retry.UnaryClientInterceptor(callValidatorOpts...)),
+	)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	rpcClient := getRPCClientEarlyStopping(conn)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	request := &suggestionapi.ValidateEarlyStoppingSettingsRequest{
+		EarlyStopping: g.ConvertExperiment(e).Spec.EarlyStopping,
+	}
+
+	// See https://github.com/grpc/grpc-go/issues/2636
+	// See https://github.com/grpc/grpc-go/pull/2503
+	_, err = rpcClient.ValidateEarlyStoppingSettings(ctx, request, grpc.WaitForReady(true))
+	statusCode, _ := status.FromError(err)
+
+	// validation error
+	if statusCode.Code() == codes.InvalidArgument || statusCode.Code() == codes.Unknown {
+		logger.Error(err, "ValidateEarlyStoppingSettings error")
+		return fmt.Errorf("ValidateEarlyStoppingSettings Error: %v", statusCode.Message())
+	}
+
+	// Connection error
+	if statusCode.Code() == codes.Unavailable {
+		logger.Error(err, "Connection to EarlyStopping algorithm service currently unavailable")
+		return err
+	}
+
+	// Validate to true as function is not implemented
+	if statusCode.Code() == codes.Unimplemented {
+		logger.Info("Method ValidateEarlyStoppingSettings not found", "EarlyStopping service", e.Spec.EarlyStopping.AlgorithmName)
+		return nil
+	}
+	logger.Info("EarlyStopping settings are validated")
 	return nil
 }
 
@@ -279,6 +343,9 @@ func (g *General) ConvertTrials(ts []trialsv1beta1.Trial) []*suggestionapi.Trial
 		if t.IsMetricsUnavailable() {
 			continue
 		}
+		if !t.IsObservationAvailable() && t.IsEarlyStopped() {
+			continue
+		}
 		trial := &suggestionapi.Trial{
 			Name: t.Name,
 			Spec: &suggestionapi.TrialSpec{
@@ -295,6 +362,9 @@ func (g *General) ConvertTrials(ts []trialsv1beta1.Trial) []*suggestionapi.Trial
 				CompletionTime: convertTrialStatusTime(t.Status.CompletionTime),
 				Observation:    convertTrialObservation(t.Spec.Objective.MetricStrategies, t.Status.Observation),
 			},
+		}
+		if t.Spec.Labels != nil {
+			trial.Spec.Labels = t.Spec.Labels
 		}
 		if t.Spec.Objective.Goal != nil {
 			trial.Spec.Objective.Goal = *t.Spec.Objective.Goal
@@ -357,7 +427,7 @@ func convertTrialObservation(strategies []commonapiv1beta1.MetricStrategy, obser
 	if observation != nil && observation.Metrics != nil {
 		for _, m := range observation.Metrics {
 			var value string
-			switch strategy, _ := strategyMap[m.Name]; strategy {
+			switch strategy := strategyMap[m.Name]; strategy {
 			case commonapiv1beta1.ExtractByMin:
 				if m.Min == consts.UnavailableMetricValue {
 					value = m.Latest
@@ -462,13 +532,28 @@ func convertParameterType(typ experimentsv1beta1.ParameterType) suggestionapi.Pa
 }
 
 func convertFeasibleSpace(fs experimentsv1beta1.FeasibleSpace) *suggestionapi.FeasibleSpace {
-	res := &suggestionapi.FeasibleSpace{
-		Max:  fs.Max,
-		Min:  fs.Min,
-		List: fs.List,
-		Step: fs.Step,
+	return &suggestionapi.FeasibleSpace{
+		Max:          fs.Max,
+		Min:          fs.Min,
+		List:         fs.List,
+		Step:         fs.Step,
+		Distribution: convertDistribution(fs.Distribution),
 	}
-	return res
+}
+
+func convertDistribution(typ experimentsv1beta1.Distribution) suggestionapi.Distribution {
+	switch typ {
+	case experimentsv1beta1.DistributionUniform:
+		return suggestionapi.Distribution_UNIFORM
+	case experimentsv1beta1.DistributionLogUniform:
+		return suggestionapi.Distribution_LOG_UNIFORM
+	case experimentsv1beta1.DistributionNormal:
+		return suggestionapi.Distribution_NORMAL
+	case experimentsv1beta1.DistributionLogNormal:
+		return suggestionapi.Distribution_LOG_NORMAL
+	default:
+		return suggestionapi.Distribution_DISTRIBUTION_UNSPECIFIED
+	}
 }
 
 func convertComparison(comparison suggestionapi.ComparisonType) commonapiv1beta1.ComparisonType {

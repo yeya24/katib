@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -114,33 +114,31 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 // addWatch adds a new Controller to mgr with r as the reconcile.Reconciler
 func addWatch(mgr manager.Manager, c controller.Controller) error {
 	// Watch for changes to Experiment
-	err := c.Watch(&source.Kind{Type: &experimentsv1beta1.Experiment{}}, &handler.EnqueueRequestForObject{})
+	err := c.Watch(source.Kind[*experimentsv1beta1.Experiment](
+		mgr.GetCache(), &experimentsv1beta1.Experiment{},
+		&handler.TypedEnqueueRequestForObject[*experimentsv1beta1.Experiment]{},
+	))
 	if err != nil {
 		log.Error(err, "Experiment watch failed")
 		return err
 	}
 
 	// Watch for trials for the experiments
-	err = c.Watch(
-		&source.Kind{Type: &trialsv1beta1.Trial{}},
-		&handler.EnqueueRequestForOwner{
-			IsController: true,
-			OwnerType:    &experimentsv1beta1.Experiment{},
-		})
-
-	if err != nil {
+	if err = c.Watch(source.Kind[*trialsv1beta1.Trial](
+		mgr.GetCache(), &trialsv1beta1.Trial{},
+		handler.TypedEnqueueRequestForOwner[*trialsv1beta1.Trial](
+			mgr.GetScheme(), mgr.GetRESTMapper(), &experimentsv1beta1.Experiment{}, handler.OnlyControllerOwner(),
+		),
+	)); err != nil {
 		log.Error(err, "Trial watch failed")
 		return err
 	}
-
-	err = c.Watch(
-		&source.Kind{Type: &suggestionsv1beta1.Suggestion{}},
-		&handler.EnqueueRequestForOwner{
-			IsController: true,
-			OwnerType:    &experimentsv1beta1.Experiment{},
-		})
-
-	if err != nil {
+	if err = c.Watch(source.Kind[*suggestionsv1beta1.Suggestion](
+		mgr.GetCache(), &suggestionsv1beta1.Suggestion{},
+		handler.TypedEnqueueRequestForOwner[*suggestionsv1beta1.Suggestion](
+			mgr.GetScheme(), mgr.GetRESTMapper(), &experimentsv1beta1.Experiment{}, handler.OnlyControllerOwner(),
+		),
+	)); err != nil {
 		log.Error(err, "Suggestion watch failed")
 		return err
 	}
@@ -278,7 +276,7 @@ func (r *ReconcileExperiment) ReconcileExperiment(instance *experimentsv1beta1.E
 	}
 	reconcileRequired := !instance.IsCompleted()
 	if reconcileRequired {
-		r.ReconcileTrials(instance, trials.Items)
+		return r.ReconcileTrials(instance, trials.Items)
 	}
 
 	return nil
@@ -346,17 +344,22 @@ func (r *ReconcileExperiment) ReconcileTrials(instance *experimentsv1beta1.Exper
 func (r *ReconcileExperiment) createTrials(instance *experimentsv1beta1.Experiment, trialList []trialsv1beta1.Trial, addCount int32) error {
 
 	logger := log.WithValues("Experiment", types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()})
-	currentCount := int32(len(trialList))
 	logger.Info("Reconcile Suggestion", "addCount", addCount)
-	trials, err := r.ReconcileSuggestions(instance, currentCount, addCount)
+	trials, err := r.ReconcileSuggestions(instance, trialList, addCount)
 	if err != nil {
 		logger.Error(err, "Get suggestions error")
 		return err
 	}
 	var trialNames []string
 	for _, trial := range trials {
-		if err = r.createTrialInstance(instance, &trial); err != nil {
-			logger.Error(err, "Create trial instance error", "trial", trial)
+		trialInstance, err := r.getTrialInstance(instance, &trial)
+		if err != nil {
+			logger.Error(err, "Get trial instance error", "trial", trial)
+			return err
+		}
+		// Due to unsynchronised policy of Kubernetes controllers, trial creation can fail.
+		if err = r.Create(context.TODO(), trialInstance); err != nil {
+			logger.Error(err, "Trial create error", "Trial name", trial.Name)
 			continue
 		}
 		trialNames = append(trialNames, trial.Name)
@@ -365,7 +368,6 @@ func (r *ReconcileExperiment) createTrials(instance *experimentsv1beta1.Experime
 	if len(trialNames) != 0 {
 		logger.Info("Created Trials", "trialNames", trialNames)
 	}
-
 	return nil
 }
 
@@ -452,10 +454,23 @@ func (r *ReconcileExperiment) deleteTrials(instance *experimentsv1beta1.Experime
 }
 
 // ReconcileSuggestions gets or creates the suggestion if needed.
-func (r *ReconcileExperiment) ReconcileSuggestions(instance *experimentsv1beta1.Experiment, currentCount, addCount int32) ([]suggestionsv1beta1.TrialAssignment, error) {
+func (r *ReconcileExperiment) ReconcileSuggestions(instance *experimentsv1beta1.Experiment, trialList []trialsv1beta1.Trial, addCount int32) ([]suggestionsv1beta1.TrialAssignment, error) {
 	logger := log.WithValues("Experiment", types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()})
 	var assignments []suggestionsv1beta1.TrialAssignment
-	suggestionRequestsCount := currentCount + addCount
+	currentCount := int32(len(trialList))
+	incompleteEarlyStoppingCount := int32(0)
+	trialNames := map[string]bool{}
+	for _, trial := range trialList {
+		trialNames[trial.Name] = true
+
+		if !trial.IsObservationAvailable() && trial.IsEarlyStopped() {
+			incompleteEarlyStoppingCount += 1
+		}
+	}
+
+	// Exclude the number of incomplete early stopping trials from total suggestion requests
+	// This means that no new trials will be requested from suggestion service until observations are ready for early stopped trials
+	suggestionRequestsCount := currentCount + addCount - incompleteEarlyStoppingCount
 
 	logger.Info("GetOrCreateSuggestion", "name", instance.Name, "Suggestion Requests", suggestionRequestsCount)
 	original, err := r.GetOrCreateSuggestion(instance, suggestionRequestsCount)
@@ -471,7 +486,11 @@ func (r *ReconcileExperiment) ReconcileSuggestions(instance *experimentsv1beta1.
 				suggestion := original.DeepCopy()
 				if len(suggestion.Status.Suggestions) > int(currentCount) {
 					suggestions := suggestion.Status.Suggestions
-					assignments = suggestions[currentCount:]
+					for _, suggestion := range suggestions {
+						if !trialNames[suggestion.Name] {
+							assignments = append(assignments, suggestion)
+						}
+					}
 				}
 				if suggestion.Spec.Requests != suggestionRequestsCount {
 					suggestion.Spec.Requests = suggestionRequestsCount

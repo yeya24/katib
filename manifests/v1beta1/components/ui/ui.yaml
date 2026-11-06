@@ -1,26 +1,25 @@
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: katib-ui
   namespace: kubeflow
-  # TODO (andreyvelich): Modify labels to follow k8s guidelines.
   labels:
-    app: katib-ui
+    katib.kubeflow.org/component: ui
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: katib-ui
+      katib.kubeflow.org/component: ui
   template:
     metadata:
       labels:
-        app: katib-ui
-      annotations:
+        katib.kubeflow.org/component: ui
         sidecar.istio.io/inject: "false"
     spec:
       containers:
         - name: katib-ui
-          image: docker.io/kubeflowkatib/katib-ui
+          image: ghcr.io/kubeflow/katib/katib-ui
           command:
             - "./katib-ui"
           args:
@@ -33,4 +32,13 @@ spec:
           ports:
             - name: ui
               containerPort: 8080
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            runAsUser: 1000
+            seccompProfile:
+              type: RuntimeDefault
+            capabilities:
+              drop:
+              - ALL
       serviceAccountName: katib-ui

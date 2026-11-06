@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,16 +28,8 @@ import (
 	"github.com/kubeflow/katib/pkg/db/v1beta1/common"
 )
 
-var dbInterface, mysqlInterface common.KatibDBInterface
+var dbInterface common.KatibDBInterface
 var mock sqlmock.Sqlmock
-
-var observationLogsColumns = []string{
-	"trial_name",
-	"id",
-	"time",
-	"metric_name",
-	"value",
-}
 
 func TestMain(m *testing.M) {
 	db, sm, err := sqlmock.New()
@@ -46,10 +38,7 @@ func TestMain(m *testing.M) {
 		fmt.Printf("error opening db: %v\n", err)
 		os.Exit(1)
 	}
-	dbInterface, err = NewWithSQLConn(db)
-	if err != nil {
-		fmt.Printf("error NewWithSQLConn: %v\n", err)
-	}
+	dbInterface = &dbConn{db: db}
 	mock.ExpectExec("CREATE TABLE IF NOT EXISTS observation_logs").WithArgs().WillReturnResult(sqlmock.NewResult(1, 1))
 	dbInterface.DBInit()
 	err = dbInterface.SelectOne()

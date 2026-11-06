@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,13 +24,14 @@ import (
 	api_v1_beta1 "github.com/kubeflow/katib/pkg/apis/manager/v1beta1"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 const (
 	AlgorithmCMAES  = "cmaes"
 	AlgorithmTPE    = "tpe"
 	AlgorithmRandom = "random"
+	AlgorithmSobol  = "sobol"
 
 	defaultStudyName = "Katib"
 )
@@ -71,9 +72,9 @@ func (s *SuggestionService) GetSuggestions(
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 
-	requestNumber := int(req.GetRequestNumber())
-	parameterAssignments := make([]*api_v1_beta1.GetSuggestionsReply_ParameterAssignments, requestNumber)
-	for i := 0; i < requestNumber; i++ {
+	currentRequestNumber := int(req.GetCurrentRequestNumber())
+	parameterAssignments := make([]*api_v1_beta1.GetSuggestionsReply_ParameterAssignments, currentRequestNumber)
+	for i := 0; i < currentRequestNumber; i++ {
 		trialID, assignments, err := sampleNextParam(s.study, s.searchSpace)
 		if err != nil {
 			klog.Errorf("Failed to sample next param: trialID=%d, err=%s", trialID, err)
@@ -178,7 +179,7 @@ func (s *SuggestionService) ValidateAlgorithmSettings(
 	}
 
 	algorithmName := req.GetExperiment().GetSpec().GetAlgorithm().GetAlgorithmName()
-	if algorithmName != AlgorithmRandom && algorithmName != AlgorithmCMAES && algorithmName != AlgorithmTPE {
+	if algorithmName != AlgorithmRandom && algorithmName != AlgorithmCMAES && algorithmName != AlgorithmTPE && algorithmName != AlgorithmSobol {
 		return nil, status.Error(codes.InvalidArgument, "unsupported algorithm")
 	}
 

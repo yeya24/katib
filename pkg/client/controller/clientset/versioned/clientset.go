@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,9 +19,9 @@ limitations under the License.
 package versioned
 
 import (
-	"fmt"
+	fmt "fmt"
+	http "net/http"
 
-	commonv1beta1 "github.com/kubeflow/katib/pkg/client/controller/clientset/versioned/typed/common/v1beta1"
 	experimentv1beta1 "github.com/kubeflow/katib/pkg/client/controller/clientset/versioned/typed/experiments/v1beta1"
 	suggestionv1beta1 "github.com/kubeflow/katib/pkg/client/controller/clientset/versioned/typed/suggestions/v1beta1"
 	trialv1beta1 "github.com/kubeflow/katib/pkg/client/controller/clientset/versioned/typed/trials/v1beta1"
@@ -32,25 +32,17 @@ import (
 
 type Interface interface {
 	Discovery() discovery.DiscoveryInterface
-	CommonV1beta1() commonv1beta1.CommonV1beta1Interface
 	ExperimentV1beta1() experimentv1beta1.ExperimentV1beta1Interface
 	SuggestionV1beta1() suggestionv1beta1.SuggestionV1beta1Interface
 	TrialV1beta1() trialv1beta1.TrialV1beta1Interface
 }
 
-// Clientset contains the clients for groups. Each group has exactly one
-// version included in a Clientset.
+// Clientset contains the clients for groups.
 type Clientset struct {
 	*discovery.DiscoveryClient
-	commonV1beta1     *commonv1beta1.CommonV1beta1Client
 	experimentV1beta1 *experimentv1beta1.ExperimentV1beta1Client
 	suggestionV1beta1 *suggestionv1beta1.SuggestionV1beta1Client
 	trialV1beta1      *trialv1beta1.TrialV1beta1Client
-}
-
-// CommonV1beta1 retrieves the CommonV1beta1Client
-func (c *Clientset) CommonV1beta1() commonv1beta1.CommonV1beta1Interface {
-	return c.commonV1beta1
 }
 
 // ExperimentV1beta1 retrieves the ExperimentV1beta1Client
@@ -79,7 +71,29 @@ func (c *Clientset) Discovery() discovery.DiscoveryInterface {
 // NewForConfig creates a new Clientset for the given config.
 // If config's RateLimiter is not set and QPS and Burst are acceptable,
 // NewForConfig will generate a rate-limiter in configShallowCopy.
+// NewForConfig is equivalent to NewForConfigAndClient(c, httpClient),
+// where httpClient was generated with rest.HTTPClientFor(c).
 func NewForConfig(c *rest.Config) (*Clientset, error) {
+	configShallowCopy := *c
+
+	if configShallowCopy.UserAgent == "" {
+		configShallowCopy.UserAgent = rest.DefaultKubernetesUserAgent()
+	}
+
+	// share the transport between all clients
+	httpClient, err := rest.HTTPClientFor(&configShallowCopy)
+	if err != nil {
+		return nil, err
+	}
+
+	return NewForConfigAndClient(&configShallowCopy, httpClient)
+}
+
+// NewForConfigAndClient creates a new Clientset for the given config and http client.
+// Note the http client provided takes precedence over the configured transport values.
+// If config's RateLimiter is not set and QPS and Burst are acceptable,
+// NewForConfigAndClient will generate a rate-limiter in configShallowCopy.
+func NewForConfigAndClient(c *rest.Config, httpClient *http.Client) (*Clientset, error) {
 	configShallowCopy := *c
 	if configShallowCopy.RateLimiter == nil && configShallowCopy.QPS > 0 {
 		if configShallowCopy.Burst <= 0 {
@@ -87,26 +101,23 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 		}
 		configShallowCopy.RateLimiter = flowcontrol.NewTokenBucketRateLimiter(configShallowCopy.QPS, configShallowCopy.Burst)
 	}
+
 	var cs Clientset
 	var err error
-	cs.commonV1beta1, err = commonv1beta1.NewForConfig(&configShallowCopy)
+	cs.experimentV1beta1, err = experimentv1beta1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	cs.experimentV1beta1, err = experimentv1beta1.NewForConfig(&configShallowCopy)
+	cs.suggestionV1beta1, err = suggestionv1beta1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
 	}
-	cs.suggestionV1beta1, err = suggestionv1beta1.NewForConfig(&configShallowCopy)
-	if err != nil {
-		return nil, err
-	}
-	cs.trialV1beta1, err = trialv1beta1.NewForConfig(&configShallowCopy)
+	cs.trialV1beta1, err = trialv1beta1.NewForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
 	}
 
-	cs.DiscoveryClient, err = discovery.NewDiscoveryClientForConfig(&configShallowCopy)
+	cs.DiscoveryClient, err = discovery.NewDiscoveryClientForConfigAndClient(&configShallowCopy, httpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -116,20 +127,16 @@ func NewForConfig(c *rest.Config) (*Clientset, error) {
 // NewForConfigOrDie creates a new Clientset for the given config and
 // panics if there is an error in the config.
 func NewForConfigOrDie(c *rest.Config) *Clientset {
-	var cs Clientset
-	cs.commonV1beta1 = commonv1beta1.NewForConfigOrDie(c)
-	cs.experimentV1beta1 = experimentv1beta1.NewForConfigOrDie(c)
-	cs.suggestionV1beta1 = suggestionv1beta1.NewForConfigOrDie(c)
-	cs.trialV1beta1 = trialv1beta1.NewForConfigOrDie(c)
-
-	cs.DiscoveryClient = discovery.NewDiscoveryClientForConfigOrDie(c)
-	return &cs
+	cs, err := NewForConfig(c)
+	if err != nil {
+		panic(err)
+	}
+	return cs
 }
 
 // New creates a new Clientset for the given RESTClient.
 func New(c rest.Interface) *Clientset {
 	var cs Clientset
-	cs.commonV1beta1 = commonv1beta1.New(c)
 	cs.experimentV1beta1 = experimentv1beta1.New(c)
 	cs.suggestionV1beta1 = suggestionv1beta1.New(c)
 	cs.trialV1beta1 = trialv1beta1.New(c)

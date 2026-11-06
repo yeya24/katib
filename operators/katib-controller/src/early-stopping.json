@@ -1,6 +1,0 @@
-{
-  "medianstop": {
-    "image": "docker.io/kubeflowkatib/earlystopping-medianstop",
-    "imagePullPolicy": "Always"
-  }
-}

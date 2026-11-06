@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,24 +19,35 @@ package consts
 import (
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-
 	"github.com/kubeflow/katib/pkg/util/v1beta1/env"
 )
 
 const (
 
+	// ActionTypeCreate is the create CRUD action
+	ActionTypeCreate = "create"
+	// ActionTypeList is the list CRUD action
+	ActionTypeList = "list"
+	// ActionTypeGet is the get CRUD action
+	ActionTypeGet = "get"
+	// ActionTypeUpdate is the update CRUD action
+	ActionTypeUpdate = "update"
+	// ActionTypeDelete is the delete CRUD action
+	ActionTypeDelete = "delete"
+
 	// PluralTrial is the plural for Trial object
 	PluralTrial = "trials"
+	// PluralExperiment is the plural for Experiment object
+	PluralExperiment = "experiments"
+	// PluralSuggestion is the plural for Suggestion object
+	PluralSuggestion = "suggestions"
 
 	// ConfigExperimentSuggestionName is the config name of the
 	// suggestion client implementation in experiment controller.
 	ConfigExperimentSuggestionName = "experiment-suggestion-name"
 
-	// ConfigCertLocalFS is the config name which indicates if we
-	// should store the cert in file system.
-	// TODO (andreyvelich): Currently is is not possible to store webhook cert in the local file system
-	// ConfigCertLocalFS = "cert-local-filesystem"
+	// CertDir is the location saved certs for the webhooks.
+	CertDir = "/tmp/cert"
 
 	// ConfigInjectSecurityContext is the config name which indicates
 	// if we should inject the security context into the metrics collector
@@ -49,12 +60,17 @@ const (
 	// resources list which can be used as trial template
 	ConfigTrialResources = "trial-resources"
 
+	// EnvTrialName is the env variable of Trial name
+	EnvTrialName = "KATIB_TRIAL_NAME"
+
 	// LabelExperimentName is the label of experiment name.
-	LabelExperimentName = "experiment"
+	LabelExperimentName = "katib.kubeflow.org/experiment"
 	// LabelSuggestionName is the label of suggestion name.
-	LabelSuggestionName = "suggestion"
+	LabelSuggestionName = "katib.kubeflow.org/suggestion"
+	// LabelTrialName is the label of trial name.
+	LabelTrialName = "katib.kubeflow.org/trial"
 	// LabelDeploymentName is the label of deployment name.
-	LabelDeploymentName = "deployment"
+	LabelDeploymentName = "katib.kubeflow.org/deployment"
 
 	// ContainerSuggestion is the container name to run Suggestion service.
 	ContainerSuggestion = "suggestion"
@@ -71,10 +87,6 @@ const (
 	DefaultEarlyStoppingPortName = "earlystop-api"
 	// DefaultEarlyStoppingPort is the default port of EarlyStopping service.
 	DefaultEarlyStoppingPort = 6788
-
-	// DefaultGRPCService is the default suggestion service name,
-	// which is used to run healthz check using grpc probe.
-	DefaultGRPCService = "manager.v1beta1.Suggestion"
 
 	// DefaultGRPCRetryAttempts is the the maximum number of retries for gRPC calls
 	DefaultGRPCRetryAttempts = 10
@@ -95,63 +107,28 @@ const (
 
 	// KatibConfigMapName is the configmap name which includes Katib's configuration.
 	KatibConfigMapName = "katib-config"
-	// LabelSuggestionTag is the name of suggestion config in Katib configmap.
-	LabelSuggestionTag = "suggestion"
-	// LabelMetricsCollectorSidecar is the name of metrics collector config in Katib configmap.
-	LabelMetricsCollectorSidecar = "metrics-collector-sidecar"
-	// LabelEarlyStoppingTag is the name of early stopping config in Katib configmap.
-	LabelEarlyStoppingTag = "early-stopping"
-	// DefaultImagePullPolicy is the default value for image pull policy.
-	DefaultImagePullPolicy = corev1.PullIfNotPresent
-	// DefaultCPULimit is the default value for CPU limit.
-	DefaultCPULimit = "500m"
-	// DefaultCPURequest is the default value for CPU request.
-	DefaultCPURequest = "50m"
-	// DefaultMemLimit is the default value for memory limit.
-	DefaultMemLimit = "100Mi"
-	// DefaultMemRequest is the default value for memory request.
-	DefaultMemRequest = "10Mi"
-	// DefaultDiskLimit is the default value for disk limit.
-	DefaultDiskLimit = "5Gi"
-	// DefaultDiskRequest is the default value for disk request.
-	DefaultDiskRequest = "500Mi"
+	// LabelKatibConfigTag is the name of the config in Katib ConfigMap.
+	LabelKatibConfigTag = "katib-config.yaml"
 
-	// DefaultContainerSuggestionVolumeMountPath is the default mount path in suggestion container
-	DefaultContainerSuggestionVolumeMountPath = "/opt/katib/data"
-
-	// DefaultSuggestionStorageClassName is the default value for suggestion's volume storage class name
-	DefaultSuggestionStorageClassName = "katib-suggestion"
-
-	// DefaultSuggestionVolumeStorage is the default value for suggestion's volume storage
-	DefaultSuggestionVolumeStorage = "1Gi"
-
-	// DefaultSuggestionVolumeAccessMode is the default value for suggestion's volume access mode
-	DefaultSuggestionVolumeAccessMode = corev1.ReadWriteOnce
-
-	// DefaultSuggestionVolumeLocalPathPrefix is the default cluster local path prefix for suggestion volume
-	// Full default local path = /tmp/katib/suggestions/<suggestion-name>-<suggestion-algorithm>-<suggestion-namespace>
-	DefaultSuggestionVolumeLocalPathPrefix = "/tmp/katib/suggestions/"
+	// SuggestionVolumeMountKey specifies the AlgorithmSettings key used to toggle Suggestion managed trial storage
+	SuggestionVolumeMountKey = "suggestion_trial_dir"
 
 	// ReconcileErrorReason is the reason when there is a reconcile error.
 	ReconcileErrorReason = "ReconcileError"
 
 	// JobKindJob is the kind of the Kubernetes Job.
 	JobKindJob = "Job"
-	// JobKindTF is the kind of TFJob.
-	JobKindTF = "TFJob"
-	// JobKindPyTorch is the kind of PyTorchJob.
-	JobKindPyTorch = "PyTorchJob"
 
-	// AnnotationIstioSidecarInjectName is the annotation of Istio Sidecar
-	AnnotationIstioSidecarInjectName = "sidecar.istio.io/inject"
+	// LabelIstioSidecarInjectName is the label of Istio Sidecar
+	LabelIstioSidecarInjectName = "sidecar.istio.io/inject"
 
-	// AnnotationIstioSidecarInjectValue is the value of Istio Sidecar annotation
-	AnnotationIstioSidecarInjectValue = "false"
+	// LabelIstioSidecarInjectValue is the value of Istio Sidecar label
+	LabelIstioSidecarInjectValue = "false"
 
 	// LabelTrialTemplateConfigMapName is the label name for the Trial templates configMap
-	LabelTrialTemplateConfigMapName = "app"
+	LabelTrialTemplateConfigMapName = "katib.kubeflow.org/component"
 	// LabelTrialTemplateConfigMapValue is the label value for the Trial templates configMap
-	LabelTrialTemplateConfigMapValue = "katib-trial-templates"
+	LabelTrialTemplateConfigMapValue = "trial-templates"
 
 	// TrialTemplateParamReplaceFormat is the format to make substitution in Trial template from Names in TrialParameters
 	// E.g if Name = learningRate, according value in Trial template must be ${trialParameters.learningRate}
@@ -190,4 +167,18 @@ var (
 	DefaultKatibDBManagerServiceIP = env.GetEnvOrDefault(DefaultKatibDBManagerServiceIPEnvName, "katib-db-manager")
 	// DefaultKatibDBManagerServicePort is the default Port of Katib DB Manager
 	DefaultKatibDBManagerServicePort = env.GetEnvOrDefault(DefaultKatibDBManagerServicePortEnvName, "6789")
+
+	// DefaultGRPCService is the default suggestion service name,
+	// which is used to run healthz check using grpc probe.
+	DefaultGRPCService = "manager.v1beta1.Suggestion"
+
+	// List of all valid keys of trial metadata for substitution in Trial template
+	TrialTemplateMetaKeys = []string{
+		TrialTemplateMetaKeyOfName,
+		TrialTemplateMetaKeyOfNamespace,
+		TrialTemplateMetaKeyOfKind,
+		TrialTemplateMetaKeyOfAPIVersion,
+		TrialTemplateMetaKeyOfAnnotations,
+		TrialTemplateMetaKeyOfLabels,
+	}
 )

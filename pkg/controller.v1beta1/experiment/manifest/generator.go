@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -22,10 +22,10 @@ import (
 	"regexp"
 	"strings"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	configv1beta1 "github.com/kubeflow/katib/pkg/apis/config/v1beta1"
 	commonapiv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/common/v1beta1"
 	experimentsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/experiments/v1beta1"
 	"github.com/kubeflow/katib/pkg/controller.v1beta1/consts"
@@ -34,8 +34,13 @@ import (
 	"github.com/kubeflow/katib/pkg/util/v1beta1/katibconfig"
 )
 
-const (
-	defaultMetricsCollectorTemplateName = "defaultMetricsCollectorTemplate.yaml"
+var (
+	errConfigMapNotFound                  = errors.New("configMap not found")
+	errConvertStringToUnstructuredFailed  = errors.New("failed to convert string to unstructured")
+	errConvertUnstructuredToStringFailed  = errors.New("failed to convert unstructured to string")
+	errParamNotFoundInParameterAssignment = errors.New("unable to find non-meta parameter from TrialParameters in ParameterAssignment")
+	errParamNotFoundInTrialParameters     = errors.New("unable to find parameter from ParameterAssignment in TrialParameters")
+	errTrialTemplateNotFound              = errors.New("unable to find trial template in ConfigMap")
 )
 
 // Generator is the type for manifests Generator.
@@ -43,8 +48,9 @@ type Generator interface {
 	InjectClient(c client.Client)
 	GetTrialTemplate(instance *experimentsv1beta1.Experiment) (string, error)
 	GetRunSpecWithHyperParameters(experiment *experimentsv1beta1.Experiment, trialName, trialNamespace string, assignments []commonapiv1beta1.ParameterAssignment) (*unstructured.Unstructured, error)
-	GetSuggestionConfigData(algorithmName string) (katibconfig.SuggestionConfig, error)
-	GetMetricsCollectorConfigData(cKind commonapiv1beta1.CollectorKind) (katibconfig.MetricsCollectorConfig, error)
+	GetSuggestionConfigData(algorithmName string) (configv1beta1.SuggestionConfig, error)
+	GetEarlyStoppingConfigData(algorithmName string) (configv1beta1.EarlyStoppingConfig, error)
+	GetMetricsCollectorConfigData(cKind commonapiv1beta1.CollectorKind) (configv1beta1.MetricsCollectorConfig, error)
 }
 
 // DefaultGenerator is the default implementation of Generator.
@@ -65,13 +71,18 @@ func (g *DefaultGenerator) InjectClient(c client.Client) {
 }
 
 // GetMetricsCollectorConfigData returns metrics collector configuration for a given collector kind.
-func (g *DefaultGenerator) GetMetricsCollectorConfigData(cKind commonapiv1beta1.CollectorKind) (katibconfig.MetricsCollectorConfig, error) {
+func (g *DefaultGenerator) GetMetricsCollectorConfigData(cKind commonapiv1beta1.CollectorKind) (configv1beta1.MetricsCollectorConfig, error) {
 	return katibconfig.GetMetricsCollectorConfigData(cKind, g.client.GetClient())
 }
 
 // GetSuggestionConfigData returns suggestion configuration for a given algorithm name.
-func (g *DefaultGenerator) GetSuggestionConfigData(algorithmName string) (katibconfig.SuggestionConfig, error) {
+func (g *DefaultGenerator) GetSuggestionConfigData(algorithmName string) (configv1beta1.SuggestionConfig, error) {
 	return katibconfig.GetSuggestionConfigData(algorithmName, g.client.GetClient())
+}
+
+// GetEarlyStoppingConfigData returns early stopping configuration for a given algorithm.
+func (g *DefaultGenerator) GetEarlyStoppingConfigData(algorithmName string) (configv1beta1.EarlyStoppingConfig, error) {
+	return katibconfig.GetEarlyStoppingConfigData(algorithmName, g.client.GetClient())
 }
 
 // GetRunSpecWithHyperParameters returns the specification for trial with hyperparameters.
@@ -85,7 +96,7 @@ func (g *DefaultGenerator) GetRunSpecWithHyperParameters(experiment *experiments
 	// Convert Trial template to unstructured
 	runSpec, err := util.ConvertStringToUnstructured(replacedTemplate)
 	if err != nil {
-		return nil, fmt.Errorf("ConvertStringToUnstructured failed: %v", err)
+		return nil, fmt.Errorf("%w: %w", errConvertStringToUnstructuredFailed, err)
 	}
 
 	// Set name and namespace for Run Spec
@@ -107,7 +118,7 @@ func (g *DefaultGenerator) applyParameters(experiment *experimentsv1beta1.Experi
 	if trialSpec == nil {
 		trialSpec, err = util.ConvertStringToUnstructured(trialTemplate)
 		if err != nil {
-			return "", fmt.Errorf("ConvertStringToUnstructured failed: %v", err)
+			return "", fmt.Errorf("%w: %w", errConvertStringToUnstructuredFailed, err)
 		}
 	}
 
@@ -130,7 +141,7 @@ func (g *DefaultGenerator) applyParameters(experiment *experimentsv1beta1.Experi
 				nonMetaParamCount += 1
 				continue
 			} else {
-				return "", fmt.Errorf("Unable to find parameter: %v in parameter assignment %v", param.Reference, assignmentsMap)
+				return "", fmt.Errorf("%w: parameter: %v, parameter assignment: %v", errParamNotFoundInParameterAssignment, param.Reference, assignmentsMap)
 			}
 		}
 		metaRefKey = sub[1]
@@ -171,9 +182,10 @@ func (g *DefaultGenerator) applyParameters(experiment *experimentsv1beta1.Experi
 		}
 	}
 
-	// Number of parameters must be equal
+	// Number of assignment parameters must be equal to the number of non-meta trial parameters
+	// i.e. all parameters in ParameterAssignment must be in TrialParameters
 	if len(assignments) != nonMetaParamCount {
-		return "", fmt.Errorf("Number of TrialAssignment: %v != number of nonMetaTrialParameters in TrialSpec: %v", len(assignments), nonMetaParamCount)
+		return "", fmt.Errorf("%w: parameter assignments: %v, non-meta trial parameter count: %v", errParamNotFoundInTrialParameters, assignments, nonMetaParamCount)
 	}
 
 	// Replacing placeholders with parameter values
@@ -193,7 +205,7 @@ func (g *DefaultGenerator) GetTrialTemplate(instance *experimentsv1beta1.Experim
 	if trialSource.TrialSpec != nil {
 		trialTemplateString, err = util.ConvertUnstructuredToString(trialSource.TrialSpec)
 		if err != nil {
-			return "", fmt.Errorf("ConvertUnstructuredToString failed: %v", err)
+			return "", fmt.Errorf("%w: %w", errConvertUnstructuredToStringFailed, err)
 		}
 	} else {
 		configMapNS := trialSource.ConfigMap.ConfigMapNamespace
@@ -201,13 +213,12 @@ func (g *DefaultGenerator) GetTrialTemplate(instance *experimentsv1beta1.Experim
 		templatePath := trialSource.ConfigMap.TemplatePath
 		configMap, err := g.client.GetConfigMap(configMapName, configMapNS)
 		if err != nil {
-			return "", fmt.Errorf("GetConfigMap failed: %v", err)
+			return "", fmt.Errorf("%w: %w", errConfigMapNotFound, err)
 		}
 		var ok bool
 		trialTemplateString, ok = configMap[templatePath]
 		if !ok {
-			err = errors.New(string(metav1.StatusReasonNotFound))
-			return "", fmt.Errorf("TemplatePath: %v not found in configMap: %v", templatePath, configMap)
+			return "", fmt.Errorf("%w: TemplatePath: %v, ConfigMap: %v", errTrialTemplateNotFound, templatePath, configMap)
 		}
 	}
 

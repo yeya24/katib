@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,25 +21,21 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	"github.com/kubeflow/katib/pkg/webhook/v1beta1/experiment"
 	"github.com/kubeflow/katib/pkg/webhook/v1beta1/pod"
 )
 
-func AddToManager(mgr manager.Manager, port int) error {
-
-	// Create a webhook server.
-	hookServer := &webhook.Server{
-		Port:    port,
-		CertDir: "/tmp/cert",
-	}
+func AddToManager(mgr manager.Manager, hookServer webhook.Server) error {
 	if err := mgr.Add(hookServer); err != nil {
 		return fmt.Errorf("Add webhook server to the manager failed: %v", err)
 	}
 
-	experimentValidator := experiment.NewExperimentValidator(mgr.GetClient())
-	experimentDefaulter := experiment.NewExperimentDefaulter(mgr.GetClient())
-	sidecarInjector := pod.NewSidecarInjector(mgr.GetClient())
+	decoder := admission.NewDecoder(mgr.GetScheme())
+	experimentValidator := experiment.NewExperimentValidator(mgr.GetClient(), decoder)
+	experimentDefaulter := experiment.NewExperimentDefaulter(mgr.GetClient(), decoder)
+	sidecarInjector := pod.NewSidecarInjector(mgr.GetClient(), decoder)
 
 	hookServer.Register("/validate-experiment", &webhook.Admission{Handler: experimentValidator})
 	hookServer.Register("/mutate-experiment", &webhook.Admission{Handler: experimentDefaulter})

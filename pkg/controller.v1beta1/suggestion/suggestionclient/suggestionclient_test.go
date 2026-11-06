@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,11 +23,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/golang/mock/gomock"
+	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/onsi/gomega"
+	"go.uber.org/mock/gomock"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -52,7 +55,12 @@ type k8sMatcher struct {
 }
 
 func (k8s k8sMatcher) Matches(x interface{}) bool {
-	return equality.Semantic.DeepEqual(k8s.x, x)
+	switch ex := k8s.x.(type) {
+	case proto.Message:
+		return proto.Equal(ex, x.(proto.Message))
+	default:
+		return equality.Semantic.DeepEqual(k8s.x, x)
+	}
 }
 
 func (k8s k8sMatcher) String() string {
@@ -185,62 +193,62 @@ func TestSyncAssignments(t *testing.T) {
 	)
 
 	tcs := []struct {
-		Experiment      *experimentsv1beta1.Experiment
-		Suggestion      *suggestionsv1beta1.Suggestion
-		Trials          []trialsv1beta1.Trial
-		Err             bool
-		TestDescription string
+		experiment      *experimentsv1beta1.Experiment
+		suggestion      *suggestionsv1beta1.Suggestion
+		trials          []trialsv1beta1.Trial
+		err             bool
+		testDescription string
 	}{
 		// Experiment contains HP and NAS config just for the test purpose
 		// validRunGetSuggestions + validRunGetEarlyStopRules case
 		{
-			Experiment:      newFakeExperiment(),
-			Suggestion:      newFakeSuggestion(),
-			Trials:          newFakeTrials(),
-			Err:             false,
-			TestDescription: "SyncAssignments valid run",
+			experiment:      newFakeExperiment(),
+			suggestion:      newFakeSuggestion(),
+			trials:          newFakeTrials(),
+			err:             false,
+			testDescription: "SyncAssignments valid run",
 		},
 		{
-			Suggestion: func() *suggestionsv1beta1.Suggestion {
+			suggestion: func() *suggestionsv1beta1.Suggestion {
 				s := newFakeSuggestion()
 				s.Spec.Requests = 4
 				s.Status.SuggestionCount = 6
 				return s
 			}(),
-			Err:             false,
-			TestDescription: "Negative request number",
+			err:             false,
+			testDescription: "Negative request number",
 		},
 		// getSuggestionsFail case
 		{
-			Experiment:      newFakeExperiment(),
-			Suggestion:      newFakeSuggestion(),
-			Trials:          newFakeTrials(),
-			Err:             true,
-			TestDescription: "Unable to execute GetSuggestions",
+			experiment:      newFakeExperiment(),
+			suggestion:      newFakeSuggestion(),
+			trials:          newFakeTrials(),
+			err:             true,
+			testDescription: "Unable to execute GetSuggestions",
 		},
 		// invalidAssignmentsCount case
 		{
-			Experiment:      newFakeExperiment(),
-			Suggestion:      newFakeSuggestion(),
-			Trials:          newFakeTrials(),
-			Err:             true,
-			TestDescription: "ParameterAssignments from response != request number",
+			experiment:      newFakeExperiment(),
+			suggestion:      newFakeSuggestion(),
+			trials:          newFakeTrials(),
+			err:             true,
+			testDescription: "ParameterAssignments from response != request number",
 		},
 		// validRunGetSuggestions2 + getEarlyStopRulesFail case
 		{
-			Experiment:      newFakeExperiment(),
-			Suggestion:      newFakeSuggestion(),
-			Trials:          newFakeTrials(),
-			Err:             true,
-			TestDescription: "Unable to execute GetEarlyStoppingRules",
+			experiment:      newFakeExperiment(),
+			suggestion:      newFakeSuggestion(),
+			trials:          newFakeTrials(),
+			err:             true,
+			testDescription: "Unable to execute GetEarlyStoppingRules",
 		},
 	}
 	for _, tc := range tcs {
-		err := suggestionClient.SyncAssignments(tc.Suggestion, tc.Experiment, tc.Trials)
-		if !tc.Err && err != nil {
-			t.Errorf("Case: %v failed. Expected nil, got %v", tc.TestDescription, err)
-		} else if tc.Err && err == nil {
-			t.Errorf("Case: %v failed. Expected err, got nil", tc.TestDescription)
+		err := suggestionClient.SyncAssignments(tc.suggestion, tc.experiment, tc.trials)
+		if !tc.err && err != nil {
+			t.Errorf("Case: %v failed. Expected nil, got %v", tc.testDescription, err)
+		} else if tc.err && err == nil {
+			t.Errorf("Case: %v failed. Expected err, got nil", tc.testDescription)
 		}
 	}
 }
@@ -286,46 +294,125 @@ func TestValidateAlgorithmSettings(t *testing.T) {
 		unimplementedMethod)
 
 	tcs := []struct {
-		Experiment      *experimentsv1beta1.Experiment
-		Suggestion      *suggestionsv1beta1.Suggestion
-		Err             bool
-		TestDescription string
+		experiment      *experimentsv1beta1.Experiment
+		suggestion      *suggestionsv1beta1.Suggestion
+		err             bool
+		testDescription string
 	}{
 		// validRun case
 		{
-			Experiment:      exp,
-			Suggestion:      sug,
-			Err:             false,
-			TestDescription: "ValidateAlgorithmSettings valid run",
+			experiment:      exp,
+			suggestion:      sug,
+			err:             false,
+			testDescription: "ValidateAlgorithmSettings valid run",
 		},
 		// invalidExperiment case
 		{
-			Experiment:      exp,
-			Suggestion:      sug,
-			Err:             true,
-			TestDescription: "Invalid argument return in Experiment validation",
+			experiment:      exp,
+			suggestion:      sug,
+			err:             true,
+			testDescription: "Invalid argument return in Experiment validation",
 		},
 		// connectionError case
 		{
-			Experiment:      exp,
-			Suggestion:      sug,
-			Err:             true,
-			TestDescription: "Connection to suggestion service error",
+			experiment:      exp,
+			suggestion:      sug,
+			err:             true,
+			testDescription: "Connection to suggestion service error",
 		},
 		// unimplementedMethod case
 		{
-			Experiment:      exp,
-			Suggestion:      sug,
-			Err:             false,
-			TestDescription: "Unimplemented ValidateAlgorithmSettings method",
+			experiment:      exp,
+			suggestion:      sug,
+			err:             false,
+			testDescription: "Unimplemented ValidateAlgorithmSettings method",
 		},
 	}
 	for _, tc := range tcs {
-		err := suggestionClient.ValidateAlgorithmSettings(tc.Suggestion, tc.Experiment)
-		if !tc.Err && err != nil {
-			t.Errorf("Case: %v failed. Expected nil, got %v", tc.TestDescription, err)
-		} else if tc.Err && err == nil {
-			t.Errorf("Case: %v failed. Expected err, got nil", tc.TestDescription)
+		err := suggestionClient.ValidateAlgorithmSettings(tc.suggestion, tc.experiment)
+		if !tc.err && err != nil {
+			t.Errorf("Case: %v failed. Expected nil, got %v", tc.testDescription, err)
+		} else if tc.err && err == nil {
+			t.Errorf("Case: %v failed. Expected err, got nil", tc.testDescription)
+		}
+	}
+}
+
+func TestValidateEarlyStoppingSettings(t *testing.T) {
+
+	mockCtrl := gomock.NewController(t)
+	defer mockCtrl.Finish()
+	rpcClientEarlyStopping := suggestionapimock.NewMockEarlyStoppingClient(mockCtrl)
+
+	getRPCClientEarlyStopping = func(conn *grpc.ClientConn) suggestionapi.EarlyStoppingClient {
+		return rpcClientEarlyStopping
+	}
+
+	expectedRequest := &suggestionapi.ValidateEarlyStoppingSettingsRequest{
+		EarlyStopping: newFakeRequest().Experiment.Spec.EarlyStopping,
+	}
+
+	validRun := rpcClientEarlyStopping.EXPECT().ValidateEarlyStoppingSettings(gomock.Any(), k8sMatcher{expectedRequest}, gomock.Any()).Return(nil, nil)
+
+	invalidExperiment := rpcClientEarlyStopping.EXPECT().ValidateEarlyStoppingSettings(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil,
+		status.Error(codes.InvalidArgument, "Invalid experiment parameter"))
+	connectionError := rpcClientEarlyStopping.EXPECT().ValidateEarlyStoppingSettings(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil,
+		status.Error(codes.Unavailable, "Unable to connect"))
+	unimplementedMethod := rpcClientEarlyStopping.EXPECT().ValidateEarlyStoppingSettings(gomock.Any(), gomock.Any(), gomock.Any()).Return(nil,
+		status.Error(codes.Unimplemented, "Method not implemented"))
+
+	suggestionClient := New()
+
+	exp := newFakeExperiment()
+	sug := newFakeSuggestion()
+
+	gomock.InOrder(
+		validRun,
+		invalidExperiment,
+		connectionError,
+		unimplementedMethod)
+
+	tcs := []struct {
+		experiment      *experimentsv1beta1.Experiment
+		suggestion      *suggestionsv1beta1.Suggestion
+		err             bool
+		testDescription string
+	}{
+		// validRun case
+		{
+			experiment:      exp,
+			suggestion:      sug,
+			err:             false,
+			testDescription: "ValidateEarlyStoppingSettings valid run",
+		},
+		// invalidExperiment case
+		{
+			experiment:      exp,
+			suggestion:      sug,
+			err:             true,
+			testDescription: "Invalid argument return in Experiment validation",
+		},
+		// connectionError case
+		{
+			experiment:      exp,
+			suggestion:      sug,
+			err:             true,
+			testDescription: "Connection to early stopping service error",
+		},
+		// unimplementedMethod case
+		{
+			experiment:      exp,
+			suggestion:      sug,
+			err:             false,
+			testDescription: "Unimplemented ValidateEarlyStoppingSettings method",
+		},
+	}
+	for _, tc := range tcs {
+		err := suggestionClient.ValidateEarlyStoppingSettings(tc.suggestion, tc.experiment)
+		if !tc.err && err != nil {
+			t.Errorf("Case: %v failed. Expected nil, got %v", tc.testDescription, err)
+		} else if tc.err && err == nil {
+			t.Errorf("Case: %v failed. Expected err, got nil", tc.testDescription)
 		}
 	}
 }
@@ -333,50 +420,50 @@ func TestValidateAlgorithmSettings(t *testing.T) {
 func TestConvertTrialConditionType(t *testing.T) {
 
 	tcs := []struct {
-		InCondition       trialsv1beta1.TrialConditionType
-		ExpectedCondition suggestionapi.TrialStatus_TrialConditionType
-		TestDescription   string
+		inCondition       trialsv1beta1.TrialConditionType
+		expectedCondition suggestionapi.TrialStatus_TrialConditionType
+		testDescription   string
 	}{
 		{
-			InCondition:       trialsv1beta1.TrialCreated,
-			ExpectedCondition: suggestionapi.TrialStatus_CREATED,
-			TestDescription:   "Convert created Trial condition",
+			inCondition:       trialsv1beta1.TrialCreated,
+			expectedCondition: suggestionapi.TrialStatus_CREATED,
+			testDescription:   "Convert created Trial condition",
 		},
 		{
-			InCondition:       trialsv1beta1.TrialRunning,
-			ExpectedCondition: suggestionapi.TrialStatus_RUNNING,
-			TestDescription:   "Convert running Trial condition",
+			inCondition:       trialsv1beta1.TrialRunning,
+			expectedCondition: suggestionapi.TrialStatus_RUNNING,
+			testDescription:   "Convert running Trial condition",
 		},
 		{
-			InCondition:       trialsv1beta1.TrialSucceeded,
-			ExpectedCondition: suggestionapi.TrialStatus_SUCCEEDED,
-			TestDescription:   "Convert succeeded Trial condition",
+			inCondition:       trialsv1beta1.TrialSucceeded,
+			expectedCondition: suggestionapi.TrialStatus_SUCCEEDED,
+			testDescription:   "Convert succeeded Trial condition",
 		},
 		{
-			InCondition:       trialsv1beta1.TrialKilled,
-			ExpectedCondition: suggestionapi.TrialStatus_KILLED,
-			TestDescription:   "Convert killed Trial condition",
+			inCondition:       trialsv1beta1.TrialKilled,
+			expectedCondition: suggestionapi.TrialStatus_KILLED,
+			testDescription:   "Convert killed Trial condition",
 		},
 		{
-			InCondition:       trialsv1beta1.TrialFailed,
-			ExpectedCondition: suggestionapi.TrialStatus_FAILED,
-			TestDescription:   "Convert failed Trial condition",
+			inCondition:       trialsv1beta1.TrialFailed,
+			expectedCondition: suggestionapi.TrialStatus_FAILED,
+			testDescription:   "Convert failed Trial condition",
 		},
 		{
-			InCondition:       trialsv1beta1.TrialEarlyStopped,
-			ExpectedCondition: suggestionapi.TrialStatus_EARLYSTOPPED,
-			TestDescription:   "Convert early stopped Trial condition",
+			inCondition:       trialsv1beta1.TrialEarlyStopped,
+			expectedCondition: suggestionapi.TrialStatus_EARLYSTOPPED,
+			testDescription:   "Convert early stopped Trial condition",
 		},
 		{
-			InCondition:       "Unknown",
-			ExpectedCondition: suggestionapi.TrialStatus_UNKNOWN,
-			TestDescription:   "Convert unknown Trial condition",
+			inCondition:       "Unknown",
+			expectedCondition: suggestionapi.TrialStatus_UNKNOWN,
+			testDescription:   "Convert unknown Trial condition",
 		},
 	}
 	for _, tc := range tcs {
-		actualCondition := convertTrialConditionType(tc.InCondition)
-		if actualCondition != tc.ExpectedCondition {
-			t.Errorf("Case: %v failed. Expected Trial condition %v, got %v", tc.TestDescription, tc.ExpectedCondition, actualCondition)
+		actualCondition := convertTrialConditionType(tc.inCondition)
+		if actualCondition != tc.expectedCondition {
+			t.Errorf("Case: %v failed. Expected Trial condition %v, got %v", tc.testDescription, tc.expectedCondition, actualCondition)
 		}
 	}
 }
@@ -384,31 +471,31 @@ func TestConvertTrialConditionType(t *testing.T) {
 func TestConvertObjectiveType(t *testing.T) {
 
 	tcs := []struct {
-		InType          commonapiv1beta1.ObjectiveType
-		ExpectedType    suggestionapi.ObjectiveType
-		TestDescription string
+		inType          commonapiv1beta1.ObjectiveType
+		expectedType    suggestionapi.ObjectiveType
+		testDescription string
 	}{
 		{
-			InType:          commonv1beta1.ObjectiveTypeMaximize,
-			ExpectedType:    suggestionapi.ObjectiveType_MAXIMIZE,
-			TestDescription: "Convert maximize objective type",
+			inType:          commonv1beta1.ObjectiveTypeMaximize,
+			expectedType:    suggestionapi.ObjectiveType_MAXIMIZE,
+			testDescription: "Convert maximize objective type",
 		},
 
 		{
-			InType:          commonv1beta1.ObjectiveTypeMinimize,
-			ExpectedType:    suggestionapi.ObjectiveType_MINIMIZE,
-			TestDescription: "Convert minimize objective type",
+			inType:          commonv1beta1.ObjectiveTypeMinimize,
+			expectedType:    suggestionapi.ObjectiveType_MINIMIZE,
+			testDescription: "Convert minimize objective type",
 		},
 		{
-			InType:          commonv1beta1.ObjectiveTypeUnknown,
-			ExpectedType:    suggestionapi.ObjectiveType_UNKNOWN,
-			TestDescription: "Convert unknown objective type",
+			inType:          commonv1beta1.ObjectiveTypeUnknown,
+			expectedType:    suggestionapi.ObjectiveType_UNKNOWN,
+			testDescription: "Convert unknown objective type",
 		},
 	}
 	for _, tc := range tcs {
-		actualType := convertObjectiveType(tc.InType)
-		if actualType != tc.ExpectedType {
-			t.Errorf("Case: %v failed. Expected objective type %v, got %v", tc.TestDescription, tc.ExpectedType, actualType)
+		actualType := convertObjectiveType(tc.inType)
+		if actualType != tc.expectedType {
+			t.Errorf("Case: %v failed. Expected objective type %v, got %v", tc.testDescription, tc.expectedType, actualType)
 		}
 	}
 }
@@ -416,40 +503,130 @@ func TestConvertObjectiveType(t *testing.T) {
 func TestConvertParameterType(t *testing.T) {
 
 	tcs := []struct {
-		InType          experimentsv1beta1.ParameterType
-		ExpectedType    suggestionapi.ParameterType
-		TestDescription string
+		inType          experimentsv1beta1.ParameterType
+		expectedType    suggestionapi.ParameterType
+		testDescription string
 	}{
 		{
-			InType:          experimentsv1beta1.ParameterTypeDiscrete,
-			ExpectedType:    suggestionapi.ParameterType_DISCRETE,
-			TestDescription: "Convert discrete parameter type",
+			inType:          experimentsv1beta1.ParameterTypeDiscrete,
+			expectedType:    suggestionapi.ParameterType_DISCRETE,
+			testDescription: "Convert discrete parameter type",
 		},
 		{
-			InType:          experimentsv1beta1.ParameterTypeCategorical,
-			ExpectedType:    suggestionapi.ParameterType_CATEGORICAL,
-			TestDescription: "Convert categorical parameter type",
+			inType:          experimentsv1beta1.ParameterTypeCategorical,
+			expectedType:    suggestionapi.ParameterType_CATEGORICAL,
+			testDescription: "Convert categorical parameter type",
 		},
 		{
-			InType:          experimentsv1beta1.ParameterTypeDouble,
-			ExpectedType:    suggestionapi.ParameterType_DOUBLE,
-			TestDescription: "Convert double parameter type",
+			inType:          experimentsv1beta1.ParameterTypeDouble,
+			expectedType:    suggestionapi.ParameterType_DOUBLE,
+			testDescription: "Convert double parameter type",
 		},
 		{
-			InType:          experimentsv1beta1.ParameterTypeInt,
-			ExpectedType:    suggestionapi.ParameterType_INT,
-			TestDescription: "Convert int parameter type",
+			inType:          experimentsv1beta1.ParameterTypeInt,
+			expectedType:    suggestionapi.ParameterType_INT,
+			testDescription: "Convert int parameter type",
 		},
 		{
-			InType:          experimentsv1beta1.ParameterTypeUnknown,
-			ExpectedType:    suggestionapi.ParameterType_UNKNOWN_TYPE,
-			TestDescription: "Convert unknown parameter type",
+			inType:          experimentsv1beta1.ParameterTypeUnknown,
+			expectedType:    suggestionapi.ParameterType_UNKNOWN_TYPE,
+			testDescription: "Convert unknown parameter type",
 		},
 	}
 	for _, tc := range tcs {
-		actualType := convertParameterType(tc.InType)
-		if actualType != tc.ExpectedType {
-			t.Errorf("Case: %v failed. Expected parameter type %v, got %v", tc.TestDescription, tc.ExpectedType, actualType)
+		actualType := convertParameterType(tc.inType)
+		if actualType != tc.expectedType {
+			t.Errorf("Case: %v failed. Expected parameter type %v, got %v", tc.testDescription, tc.expectedType, actualType)
+		}
+	}
+}
+
+func TestConvertFeasibleSpace(t *testing.T) {
+
+	tcs := []struct {
+		inFeasibleSpace       experimentsv1beta1.FeasibleSpace
+		expectedFeasibleSpace *suggestionapi.FeasibleSpace
+		testDescription       string
+	}{
+		{
+			inFeasibleSpace: experimentsv1beta1.FeasibleSpace{
+				Max:          "10",
+				Min:          "1",
+				List:         []string{"1", "2", "3"},
+				Step:         "1",
+				Distribution: experimentsv1beta1.DistributionUnknown,
+			},
+			expectedFeasibleSpace: &suggestionapi.FeasibleSpace{
+				Max:  "10",
+				Min:  "1",
+				List: []string{"1", "2", "3"},
+				Step: "1",
+			},
+			testDescription: "Convert feasible space with unknown distribution",
+		},
+		{
+			inFeasibleSpace: experimentsv1beta1.FeasibleSpace{
+				Max:          "100",
+				Min:          "10",
+				Step:         "10",
+				Distribution: experimentsv1beta1.DistributionUniform,
+			},
+			expectedFeasibleSpace: &suggestionapi.FeasibleSpace{
+				Max:          "100",
+				Min:          "10",
+				Step:         "10",
+				Distribution: suggestionapi.Distribution_UNIFORM,
+			},
+			testDescription: "Convert feasible space with uniform distribution",
+		},
+	}
+
+	for _, tc := range tcs {
+		actualFeasibleSpace := convertFeasibleSpace(tc.inFeasibleSpace)
+		if diff := cmp.Diff(tc.expectedFeasibleSpace, actualFeasibleSpace, cmpopts.IgnoreUnexported(suggestionapi.FeasibleSpace{})); diff != "" {
+			t.Errorf("Case: %v failed. Unexpected difference (-want +got):\n%s", tc.testDescription, diff)
+		}
+	}
+}
+
+func TestConvertDistribution(t *testing.T) {
+
+	tcs := []struct {
+		inDistribution       experimentsv1beta1.Distribution
+		expectedDistribution suggestionapi.Distribution
+		testDescription      string
+	}{
+		{
+			inDistribution:       experimentsv1beta1.DistributionUniform,
+			expectedDistribution: suggestionapi.Distribution_UNIFORM,
+			testDescription:      "Convert uniform distribution",
+		},
+		{
+			inDistribution:       experimentsv1beta1.DistributionLogUniform,
+			expectedDistribution: suggestionapi.Distribution_LOG_UNIFORM,
+			testDescription:      "Convert log-uniform distribution",
+		},
+		{
+			inDistribution:       experimentsv1beta1.DistributionNormal,
+			expectedDistribution: suggestionapi.Distribution_NORMAL,
+			testDescription:      "Convert normal distribution",
+		},
+		{
+			inDistribution:       experimentsv1beta1.DistributionLogNormal,
+			expectedDistribution: suggestionapi.Distribution_LOG_NORMAL,
+			testDescription:      "Convert log-normal distribution",
+		},
+		{
+			inDistribution:       experimentsv1beta1.DistributionUnknown,
+			expectedDistribution: suggestionapi.Distribution_DISTRIBUTION_UNSPECIFIED,
+			testDescription:      "Convert unknown distribution",
+		},
+	}
+
+	for _, tc := range tcs {
+		actualDistribution := convertDistribution(tc.inDistribution)
+		if actualDistribution != tc.expectedDistribution {
+			t.Errorf("Case: %v failed. Expected distribution %v, got %v", tc.testDescription, tc.expectedDistribution, actualDistribution)
 		}
 	}
 }
@@ -507,35 +684,35 @@ func TestConvertTrialObservation(t *testing.T) {
 
 func TestConvertComparison(t *testing.T) {
 	tcs := []struct {
-		InComparison       suggestionapi.ComparisonType
-		ExpectedComparison commonapiv1beta1.ComparisonType
-		TestDescription    string
+		inComparison       suggestionapi.ComparisonType
+		expectedComparison commonapiv1beta1.ComparisonType
+		testDescription    string
 	}{
 		{
-			InComparison:       suggestionapi.ComparisonType_EQUAL,
-			ExpectedComparison: commonapiv1beta1.ComparisonTypeEqual,
-			TestDescription:    "Convert equal comparison type",
+			inComparison:       suggestionapi.ComparisonType_EQUAL,
+			expectedComparison: commonapiv1beta1.ComparisonTypeEqual,
+			testDescription:    "Convert equal comparison type",
 		},
 		{
-			InComparison:       suggestionapi.ComparisonType_LESS,
-			ExpectedComparison: commonapiv1beta1.ComparisonTypeLess,
-			TestDescription:    "Convert less comparison type",
+			inComparison:       suggestionapi.ComparisonType_LESS,
+			expectedComparison: commonapiv1beta1.ComparisonTypeLess,
+			testDescription:    "Convert less comparison type",
 		},
 		{
-			InComparison:       suggestionapi.ComparisonType_GREATER,
-			ExpectedComparison: commonapiv1beta1.ComparisonTypeGreater,
-			TestDescription:    "Convert greater comparison type",
+			inComparison:       suggestionapi.ComparisonType_GREATER,
+			expectedComparison: commonapiv1beta1.ComparisonTypeGreater,
+			testDescription:    "Convert greater comparison type",
 		},
 		{
-			InComparison:       suggestionapi.ComparisonType_UNKNOWN_COMPARISON,
-			ExpectedComparison: commonapiv1beta1.ComparisonTypeEqual,
-			TestDescription:    "Convert unknown comparison type",
+			inComparison:       suggestionapi.ComparisonType_UNKNOWN_COMPARISON,
+			expectedComparison: commonapiv1beta1.ComparisonTypeEqual,
+			testDescription:    "Convert unknown comparison type",
 		},
 	}
 	for _, tc := range tcs {
-		actualComparison := convertComparison(tc.InComparison)
-		if actualComparison != tc.ExpectedComparison {
-			t.Errorf("Case: %v failed. Expected comparison type %v, got %v", tc.TestDescription, tc.ExpectedComparison, actualComparison)
+		actualComparison := convertComparison(tc.inComparison)
+		if actualComparison != tc.expectedComparison {
+			t.Errorf("Case: %v failed. Expected comparison type %v, got %v", tc.testDescription, tc.expectedComparison, actualComparison)
 		}
 	}
 }
@@ -554,6 +731,14 @@ func newFakeTrialObservation() *commonv1beta1.Observation {
 			{Name: "error", Min: "0.01", Max: "0.08", Latest: "0.05"},
 			{Name: "auc", Min: "0.70", Max: "0.95", Latest: "0.90"},
 			{Name: "accuracy", Min: "0.8", Max: "0.94", Latest: "0.93"},
+		},
+	}
+}
+
+func newFakeSuggestionTrialObservation() *commonv1beta1.Observation {
+	return &commonv1beta1.Observation{
+		Metrics: []commonv1beta1.Metric{
+			{Name: "metric1-name", Min: "0.95", Max: "0.95", Latest: "0.95"},
 		},
 	}
 }
@@ -585,6 +770,9 @@ func newFakeObjective() *commonapiv1beta1.ObjectiveSpec {
 		ObjectiveMetricName:   "metric1-name",
 		AdditionalMetricNames: []string{"metric2-name"},
 		Goal:                  &goal,
+		MetricStrategies: []commonapiv1beta1.MetricStrategy{
+			{Name: "metric1-name", Value: commonapiv1beta1.ExtractByLatest},
+		},
 	}
 }
 
@@ -596,8 +784,7 @@ func newFakeTime() *metav1.Time {
 }
 
 func newFakeExperiment() *experimentsv1beta1.Experiment {
-	var testInt int32
-	testInt = 1
+	var testInt int32 = 1
 
 	fakeParameters := []experimentsv1beta1.ParameterSpec{
 		{
@@ -715,6 +902,14 @@ func newFakeTrials() []trialsv1beta1.Trial {
 			Type: trialsv1beta1.TrialSucceeded,
 		},
 	}
+
+	fakeEarlyStoppedConditions := []trialsv1beta1.TrialCondition{
+		{
+			Type:   trialsv1beta1.TrialEarlyStopped,
+			Status: corev1.ConditionTrue,
+		},
+	}
+
 	return []trialsv1beta1.Trial{
 		{
 			ObjectMeta: metav1.ObjectMeta{
@@ -733,11 +928,13 @@ func newFakeTrials() []trialsv1beta1.Trial {
 						Value: "0.1",
 					},
 				},
+				Labels: map[string]string{},
 			},
 			Status: trialsv1beta1.TrialStatus{
 				StartTime:      newFakeTime(),
 				CompletionTime: newFakeTime(),
 				Conditions:     fakeConditions,
+				Observation:    newFakeSuggestionTrialObservation(),
 			},
 		},
 		{
@@ -757,9 +954,11 @@ func newFakeTrials() []trialsv1beta1.Trial {
 						Value: "0.2",
 					},
 				},
+				Labels: map[string]string{},
 			},
 			Status: trialsv1beta1.TrialStatus{
-				Conditions: fakeConditions,
+				Conditions:  fakeConditions,
+				Observation: newFakeSuggestionTrialObservation(),
 			},
 		},
 		{
@@ -770,11 +969,59 @@ func newFakeTrials() []trialsv1beta1.Trial {
 			Status: trialsv1beta1.TrialStatus{
 				Conditions: []trialsv1beta1.TrialCondition{
 					{
-						Type:    trialsv1beta1.TrialSucceeded,
-						Status:  corev1.ConditionFalse,
+						Type:    trialsv1beta1.TrialMetricsUnavailable,
+						Status:  corev1.ConditionTrue,
 						Message: "Metrics are not available",
 					},
 				},
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "trial4-name",
+				Namespace: "namespace",
+			},
+			Spec: trialsv1beta1.TrialSpec{
+				Objective: newFakeObjective(),
+				ParameterAssignments: []commonapiv1beta1.ParameterAssignment{
+					{
+						Name:  "param1-name",
+						Value: "4",
+					},
+					{
+						Name:  "param2-name",
+						Value: "0.4",
+					},
+				},
+				Labels: map[string]string{},
+			},
+			Status: trialsv1beta1.TrialStatus{
+				Conditions:  fakeEarlyStoppedConditions,
+				Observation: nil,
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "trial5-name",
+				Namespace: "namespace",
+			},
+			Spec: trialsv1beta1.TrialSpec{
+				Objective: newFakeObjective(),
+				ParameterAssignments: []commonapiv1beta1.ParameterAssignment{
+					{
+						Name:  "param1-name",
+						Value: "5",
+					},
+					{
+						Name:  "param2-name",
+						Value: "0.5",
+					},
+				},
+				Labels: map[string]string{},
+			},
+			Status: trialsv1beta1.TrialStatus{
+				Conditions:  fakeEarlyStoppedConditions,
+				Observation: newFakeSuggestionTrialObservation(),
 			},
 		},
 	}
@@ -801,6 +1048,8 @@ func newFakeRequest() *suggestionapi.GetSuggestionsRequest {
 			},
 		},
 	}
+
+	fakeLabels := make(map[string]string)
 
 	fakeObjective := &suggestionapi.ObjectiveSpec{
 		Type:                  suggestionapi.ObjectiveType_MAXIMIZE,
@@ -877,12 +1126,20 @@ func newFakeRequest() *suggestionapi.GetSuggestionsRequest {
 							},
 						},
 					},
+					Labels: fakeLabels,
 				},
 				Status: &suggestionapi.TrialStatus{
 					StartTime:      newFakeTime().Format(timeFormat),
 					CompletionTime: newFakeTime().Format(timeFormat),
 					Condition:      suggestionapi.TrialStatus_SUCCEEDED,
-					Observation:    &suggestionapi.Observation{},
+					Observation: &suggestionapi.Observation{
+						Metrics: []*suggestionapi.Metric{
+							{
+								Name:  "metric1-name",
+								Value: "0.95",
+							},
+						},
+					},
 				},
 			},
 			{
@@ -901,15 +1158,56 @@ func newFakeRequest() *suggestionapi.GetSuggestionsRequest {
 							},
 						},
 					},
+					Labels: fakeLabels,
 				},
 				Status: &suggestionapi.TrialStatus{
 					StartTime:      "",
 					CompletionTime: "",
 					Condition:      suggestionapi.TrialStatus_SUCCEEDED,
-					Observation:    &suggestionapi.Observation{},
+					Observation: &suggestionapi.Observation{
+						Metrics: []*suggestionapi.Metric{
+							{
+								Name:  "metric1-name",
+								Value: "0.95",
+							},
+						},
+					},
+				},
+			},
+			{
+				Name: "trial5-name",
+				Spec: &suggestionapi.TrialSpec{
+					Objective: fakeObjective,
+					ParameterAssignments: &suggestionapi.TrialSpec_ParameterAssignments{
+						Assignments: []*suggestionapi.ParameterAssignment{
+							{
+								Name:  "param1-name",
+								Value: "5",
+							},
+							{
+								Name:  "param2-name",
+								Value: "0.5",
+							},
+						},
+					},
+					Labels: fakeLabels,
+				},
+				Status: &suggestionapi.TrialStatus{
+					StartTime:      "",
+					CompletionTime: "",
+					Condition:      suggestionapi.TrialStatus_EARLYSTOPPED,
+					Observation: &suggestionapi.Observation{
+						Metrics: []*suggestionapi.Metric{
+							{
+								Name:  "metric1-name",
+								Value: "0.95",
+							},
+						},
+					},
 				},
 			},
 		},
-		RequestNumber: 2,
+		CurrentRequestNumber: 2,
+		TotalRequestNumber:   6,
 	}
 }

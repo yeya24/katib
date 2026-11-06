@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -30,6 +30,7 @@ func (e *Experiment) SetDefault() {
 	e.setDefaultObjective()
 	e.setDefaultTrialTemplate()
 	e.setDefaultMetricsCollector()
+	e.setDefaultParameterDistribution()
 }
 
 func (e *Experiment) setDefaultParallelTrialCount() {
@@ -96,7 +97,7 @@ func (e *Experiment) setDefaultObjective() {
 func (e *Experiment) setDefaultTrialTemplate() {
 	t := e.Spec.TrialTemplate
 
-	// Set default values for Job, TFJob and PyTorchJob if TrialSpec is not nil
+	// Set default values for Job and Kubeflow Training Job if TrialSpec is not nil
 	if t != nil && t.TrialSource.TrialSpec != nil {
 		jobKind := t.TrialSource.TrialSpec.GetKind()
 		if jobKind == consts.JobKindJob {
@@ -106,16 +107,29 @@ func (e *Experiment) setDefaultTrialTemplate() {
 			if t.FailureCondition == "" {
 				t.FailureCondition = DefaultJobFailureCondition
 			}
-		} else if jobKind == consts.JobKindTF || jobKind == consts.JobKindPyTorch {
+		} else if _, ok := KubeflowJobKinds[jobKind]; ok {
 			if t.SuccessCondition == "" {
-				t.SuccessCondition = DefaultKubeflowJobSuccessCondition
+				if jobKind == "TrainJob" {
+					t.SuccessCondition = DefaultTrainJobSuccessCondition
+				} else {
+					t.SuccessCondition = DefaultKubeflowJobSuccessCondition
+				}
 			}
 			if t.FailureCondition == "" {
-				t.FailureCondition = DefaultKubeflowJobFailureCondition
+				if jobKind == "TrainJob" {
+					t.FailureCondition = DefaultTrainJobFailureCondition
+				} else {
+					t.FailureCondition = DefaultKubeflowJobFailureCondition
+				}
 			}
 			// For Kubeflow Job also set default PrimaryPodLabels
 			if len(t.PrimaryPodLabels) == 0 {
-				t.PrimaryPodLabels = DefaultKubeflowJobPrimaryPodLabels
+				if jobKind == "TrainJob" {
+					t.PrimaryPodLabels = DefaultTrainJobPrimaryPodLabels
+				} else {
+					t.PrimaryPodLabels = DefaultKubeflowJobPrimaryPodLabels
+				}
+
 			}
 		}
 	}
@@ -158,6 +172,9 @@ func (e *Experiment) setDefaultMetricsCollector() {
 		if e.Spec.MetricsCollectorSpec.Source.FileSystemPath.Path == "" {
 			e.Spec.MetricsCollectorSpec.Source.FileSystemPath.Path = common.DefaultFilePath
 		}
+		if e.Spec.MetricsCollectorSpec.Source.FileSystemPath.Format == "" {
+			e.Spec.MetricsCollectorSpec.Source.FileSystemPath.Format = common.TextFormat
+		}
 	case common.TfEventCollector:
 		if e.Spec.MetricsCollectorSpec.Source == nil {
 			e.Spec.MetricsCollectorSpec.Source = &common.SourceSpec{}
@@ -170,6 +187,14 @@ func (e *Experiment) setDefaultMetricsCollector() {
 		}
 		if e.Spec.MetricsCollectorSpec.Source.FileSystemPath.Path == "" {
 			e.Spec.MetricsCollectorSpec.Source.FileSystemPath.Path = common.DefaultTensorflowEventDirPath
+		}
+	}
+}
+
+func (e *Experiment) setDefaultParameterDistribution() {
+	for i := range e.Spec.Parameters {
+		if e.Spec.Parameters[i].FeasibleSpace.Distribution == "" {
+			e.Spec.Parameters[i].FeasibleSpace.Distribution = DistributionUniform
 		}
 	}
 }

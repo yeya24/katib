@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,6 +20,7 @@ import (
 	"context"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 
 	api_pb "github.com/kubeflow/katib/pkg/apis/manager/v1beta1"
 	"github.com/kubeflow/katib/pkg/controller.v1beta1/consts"
@@ -45,7 +46,7 @@ func GetDBManagerAddr() string {
 
 func getKatibDBManagerClientAndConn() (*katibDBManagerClientAndConn, error) {
 	addr := GetDBManagerAddr()
-	conn, err := grpc.Dial(addr, grpc.WithInsecure())
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
@@ -69,6 +70,17 @@ func GetObservationLog(request *api_pb.GetObservationLogRequest) (*api_pb.GetObs
 	defer closeKatibDBManagerConnection(kcc)
 	kc := kcc.KatibDBManagerClient
 	return kc.GetObservationLog(ctx, request)
+}
+
+func ReportObservationLog(request *api_pb.ReportObservationLogRequest) (*api_pb.ReportObservationLogReply, error) {
+	ctx := context.Background()
+	kcc, err := getKatibDBManagerClientAndConn()
+	if err != nil {
+		return nil, err
+	}
+	defer closeKatibDBManagerConnection(kcc)
+	kc := kcc.KatibDBManagerClient
+	return kc.ReportObservationLog(ctx, request)
 }
 
 func DeleteObservationLog(request *api_pb.DeleteObservationLogRequest) (*api_pb.DeleteObservationLogReply, error) {

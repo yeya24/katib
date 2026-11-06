@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,124 +19,33 @@ limitations under the License.
 package fake
 
 import (
-	"context"
-
 	v1beta1 "github.com/kubeflow/katib/pkg/apis/controller/experiments/v1beta1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
-	types "k8s.io/apimachinery/pkg/types"
-	watch "k8s.io/apimachinery/pkg/watch"
-	testing "k8s.io/client-go/testing"
+	experimentsv1beta1 "github.com/kubeflow/katib/pkg/client/controller/applyconfiguration/experiments/v1beta1"
+	typedexperimentsv1beta1 "github.com/kubeflow/katib/pkg/client/controller/clientset/versioned/typed/experiments/v1beta1"
+	gentype "k8s.io/client-go/gentype"
 )
 
-// FakeExperiments implements ExperimentInterface
-type FakeExperiments struct {
+// fakeExperiments implements ExperimentInterface
+type fakeExperiments struct {
+	*gentype.FakeClientWithListAndApply[*v1beta1.Experiment, *v1beta1.ExperimentList, *experimentsv1beta1.ExperimentApplyConfiguration]
 	Fake *FakeExperimentV1beta1
-	ns   string
 }
 
-var experimentsResource = schema.GroupVersionResource{Group: "experiment.kubeflow.org", Version: "v1beta1", Resource: "experiments"}
-
-var experimentsKind = schema.GroupVersionKind{Group: "experiment.kubeflow.org", Version: "v1beta1", Kind: "Experiment"}
-
-// Get takes name of the experiment, and returns the corresponding experiment object, and an error if there is any.
-func (c *FakeExperiments) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1beta1.Experiment, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewGetAction(experimentsResource, c.ns, name), &v1beta1.Experiment{})
-
-	if obj == nil {
-		return nil, err
+func newFakeExperiments(fake *FakeExperimentV1beta1, namespace string) typedexperimentsv1beta1.ExperimentInterface {
+	return &fakeExperiments{
+		gentype.NewFakeClientWithListAndApply[*v1beta1.Experiment, *v1beta1.ExperimentList, *experimentsv1beta1.ExperimentApplyConfiguration](
+			fake.Fake,
+			namespace,
+			v1beta1.SchemeGroupVersion.WithResource("experiments"),
+			v1beta1.SchemeGroupVersion.WithKind("Experiment"),
+			func() *v1beta1.Experiment { return &v1beta1.Experiment{} },
+			func() *v1beta1.ExperimentList { return &v1beta1.ExperimentList{} },
+			func(dst, src *v1beta1.ExperimentList) { dst.ListMeta = src.ListMeta },
+			func(list *v1beta1.ExperimentList) []*v1beta1.Experiment { return gentype.ToPointerSlice(list.Items) },
+			func(list *v1beta1.ExperimentList, items []*v1beta1.Experiment) {
+				list.Items = gentype.FromPointerSlice(items)
+			},
+		),
+		fake,
 	}
-	return obj.(*v1beta1.Experiment), err
-}
-
-// List takes label and field selectors, and returns the list of Experiments that match those selectors.
-func (c *FakeExperiments) List(ctx context.Context, opts v1.ListOptions) (result *v1beta1.ExperimentList, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewListAction(experimentsResource, experimentsKind, c.ns, opts), &v1beta1.ExperimentList{})
-
-	if obj == nil {
-		return nil, err
-	}
-
-	label, _, _ := testing.ExtractFromListOptions(opts)
-	if label == nil {
-		label = labels.Everything()
-	}
-	list := &v1beta1.ExperimentList{ListMeta: obj.(*v1beta1.ExperimentList).ListMeta}
-	for _, item := range obj.(*v1beta1.ExperimentList).Items {
-		if label.Matches(labels.Set(item.Labels)) {
-			list.Items = append(list.Items, item)
-		}
-	}
-	return list, err
-}
-
-// Watch returns a watch.Interface that watches the requested experiments.
-func (c *FakeExperiments) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-	return c.Fake.
-		InvokesWatch(testing.NewWatchAction(experimentsResource, c.ns, opts))
-
-}
-
-// Create takes the representation of a experiment and creates it.  Returns the server's representation of the experiment, and an error, if there is any.
-func (c *FakeExperiments) Create(ctx context.Context, experiment *v1beta1.Experiment, opts v1.CreateOptions) (result *v1beta1.Experiment, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewCreateAction(experimentsResource, c.ns, experiment), &v1beta1.Experiment{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1beta1.Experiment), err
-}
-
-// Update takes the representation of a experiment and updates it. Returns the server's representation of the experiment, and an error, if there is any.
-func (c *FakeExperiments) Update(ctx context.Context, experiment *v1beta1.Experiment, opts v1.UpdateOptions) (result *v1beta1.Experiment, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewUpdateAction(experimentsResource, c.ns, experiment), &v1beta1.Experiment{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1beta1.Experiment), err
-}
-
-// UpdateStatus was generated because the type contains a Status member.
-// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *FakeExperiments) UpdateStatus(ctx context.Context, experiment *v1beta1.Experiment, opts v1.UpdateOptions) (*v1beta1.Experiment, error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewUpdateSubresourceAction(experimentsResource, "status", c.ns, experiment), &v1beta1.Experiment{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1beta1.Experiment), err
-}
-
-// Delete takes name of the experiment and deletes it. Returns an error if one occurs.
-func (c *FakeExperiments) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
-	_, err := c.Fake.
-		Invokes(testing.NewDeleteAction(experimentsResource, c.ns, name), &v1beta1.Experiment{})
-
-	return err
-}
-
-// DeleteCollection deletes a collection of objects.
-func (c *FakeExperiments) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
-	action := testing.NewDeleteCollectionAction(experimentsResource, c.ns, listOpts)
-
-	_, err := c.Fake.Invokes(action, &v1beta1.ExperimentList{})
-	return err
-}
-
-// Patch applies the patch and returns the patched experiment.
-func (c *FakeExperiments) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1beta1.Experiment, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewPatchSubresourceAction(experimentsResource, c.ns, name, pt, data, subresources...), &v1beta1.Experiment{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1beta1.Experiment), err
 }

@@ -1,28 +1,30 @@
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: katib-mysql
   namespace: kubeflow
-  # TODO (andreyvelich): Modify labels to follow k8s guidelines.
   labels:
-    app: katib-mysql
+    katib.kubeflow.org/component: mysql
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: katib-mysql
+      katib.kubeflow.org/component: mysql
   strategy:
     type: Recreate
   template:
     metadata:
       labels:
-        app: katib-mysql
-      annotations:
+        katib.kubeflow.org/component: mysql
         sidecar.istio.io/inject: "false"
     spec:
+      securityContext:
+        fsGroup: 999
+        fsGroupChangePolicy: OnRootMismatch
       containers:
         - name: katib-mysql
-          image: mysql:8
+          image: mysql:8.0
           args:
             - --datadir
             - /var/lib/mysql/datadir
@@ -44,22 +46,32 @@ spec:
               command:
                 - "/bin/bash"
                 - "-c"
-                - "mysql -D ${MYSQL_DATABASE} -u root -p${MYSQL_ROOT_PASSWORD} -e 'SELECT 1'"
-            initialDelaySeconds: 5
-            periodSeconds: 10
-            timeoutSeconds: 1
+                - "mysql -h 127.0.0.1 -D ${MYSQL_DATABASE} -u root -p${MYSQL_ROOT_PASSWORD} -e 'SELECT 1'"
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 10
           livenessProbe:
             exec:
               command:
-                - "/bin/bash"
-                - "-c"
-                - "mysqladmin ping -u root -p${MYSQL_ROOT_PASSWORD}"
-            initialDelaySeconds: 30
-            periodSeconds: 10
-            timeoutSeconds: 5
+              - "/bin/bash"
+              - "-c"
+              - "mysql -h 127.0.0.1 -D ${MYSQL_DATABASE} -u root -p${MYSQL_ROOT_PASSWORD} -e 'SELECT 1'"
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            failureThreshold: 10
           volumeMounts:
             - name: katib-mysql
               mountPath: /var/lib/mysql
+          securityContext:
+            allowPrivilegeEscalation: false
+            seccompProfile:
+              type: RuntimeDefault
+            runAsNonRoot: true
+            runAsUser: 999
+            runAsGroup: 999
+            capabilities:
+              drop:
+              - ALL
       volumes:
         - name: katib-mysql
           persistentVolumeClaim:

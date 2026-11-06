@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,124 +19,33 @@ limitations under the License.
 package fake
 
 import (
-	"context"
-
 	v1beta1 "github.com/kubeflow/katib/pkg/apis/controller/suggestions/v1beta1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	labels "k8s.io/apimachinery/pkg/labels"
-	schema "k8s.io/apimachinery/pkg/runtime/schema"
-	types "k8s.io/apimachinery/pkg/types"
-	watch "k8s.io/apimachinery/pkg/watch"
-	testing "k8s.io/client-go/testing"
+	suggestionsv1beta1 "github.com/kubeflow/katib/pkg/client/controller/applyconfiguration/suggestions/v1beta1"
+	typedsuggestionsv1beta1 "github.com/kubeflow/katib/pkg/client/controller/clientset/versioned/typed/suggestions/v1beta1"
+	gentype "k8s.io/client-go/gentype"
 )
 
-// FakeSuggestions implements SuggestionInterface
-type FakeSuggestions struct {
+// fakeSuggestions implements SuggestionInterface
+type fakeSuggestions struct {
+	*gentype.FakeClientWithListAndApply[*v1beta1.Suggestion, *v1beta1.SuggestionList, *suggestionsv1beta1.SuggestionApplyConfiguration]
 	Fake *FakeSuggestionV1beta1
-	ns   string
 }
 
-var suggestionsResource = schema.GroupVersionResource{Group: "suggestion.kubeflow.org", Version: "v1beta1", Resource: "suggestions"}
-
-var suggestionsKind = schema.GroupVersionKind{Group: "suggestion.kubeflow.org", Version: "v1beta1", Kind: "Suggestion"}
-
-// Get takes name of the suggestion, and returns the corresponding suggestion object, and an error if there is any.
-func (c *FakeSuggestions) Get(ctx context.Context, name string, options v1.GetOptions) (result *v1beta1.Suggestion, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewGetAction(suggestionsResource, c.ns, name), &v1beta1.Suggestion{})
-
-	if obj == nil {
-		return nil, err
+func newFakeSuggestions(fake *FakeSuggestionV1beta1, namespace string) typedsuggestionsv1beta1.SuggestionInterface {
+	return &fakeSuggestions{
+		gentype.NewFakeClientWithListAndApply[*v1beta1.Suggestion, *v1beta1.SuggestionList, *suggestionsv1beta1.SuggestionApplyConfiguration](
+			fake.Fake,
+			namespace,
+			v1beta1.SchemeGroupVersion.WithResource("suggestions"),
+			v1beta1.SchemeGroupVersion.WithKind("Suggestion"),
+			func() *v1beta1.Suggestion { return &v1beta1.Suggestion{} },
+			func() *v1beta1.SuggestionList { return &v1beta1.SuggestionList{} },
+			func(dst, src *v1beta1.SuggestionList) { dst.ListMeta = src.ListMeta },
+			func(list *v1beta1.SuggestionList) []*v1beta1.Suggestion { return gentype.ToPointerSlice(list.Items) },
+			func(list *v1beta1.SuggestionList, items []*v1beta1.Suggestion) {
+				list.Items = gentype.FromPointerSlice(items)
+			},
+		),
+		fake,
 	}
-	return obj.(*v1beta1.Suggestion), err
-}
-
-// List takes label and field selectors, and returns the list of Suggestions that match those selectors.
-func (c *FakeSuggestions) List(ctx context.Context, opts v1.ListOptions) (result *v1beta1.SuggestionList, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewListAction(suggestionsResource, suggestionsKind, c.ns, opts), &v1beta1.SuggestionList{})
-
-	if obj == nil {
-		return nil, err
-	}
-
-	label, _, _ := testing.ExtractFromListOptions(opts)
-	if label == nil {
-		label = labels.Everything()
-	}
-	list := &v1beta1.SuggestionList{ListMeta: obj.(*v1beta1.SuggestionList).ListMeta}
-	for _, item := range obj.(*v1beta1.SuggestionList).Items {
-		if label.Matches(labels.Set(item.Labels)) {
-			list.Items = append(list.Items, item)
-		}
-	}
-	return list, err
-}
-
-// Watch returns a watch.Interface that watches the requested suggestions.
-func (c *FakeSuggestions) Watch(ctx context.Context, opts v1.ListOptions) (watch.Interface, error) {
-	return c.Fake.
-		InvokesWatch(testing.NewWatchAction(suggestionsResource, c.ns, opts))
-
-}
-
-// Create takes the representation of a suggestion and creates it.  Returns the server's representation of the suggestion, and an error, if there is any.
-func (c *FakeSuggestions) Create(ctx context.Context, suggestion *v1beta1.Suggestion, opts v1.CreateOptions) (result *v1beta1.Suggestion, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewCreateAction(suggestionsResource, c.ns, suggestion), &v1beta1.Suggestion{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1beta1.Suggestion), err
-}
-
-// Update takes the representation of a suggestion and updates it. Returns the server's representation of the suggestion, and an error, if there is any.
-func (c *FakeSuggestions) Update(ctx context.Context, suggestion *v1beta1.Suggestion, opts v1.UpdateOptions) (result *v1beta1.Suggestion, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewUpdateAction(suggestionsResource, c.ns, suggestion), &v1beta1.Suggestion{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1beta1.Suggestion), err
-}
-
-// UpdateStatus was generated because the type contains a Status member.
-// Add a +genclient:noStatus comment above the type to avoid generating UpdateStatus().
-func (c *FakeSuggestions) UpdateStatus(ctx context.Context, suggestion *v1beta1.Suggestion, opts v1.UpdateOptions) (*v1beta1.Suggestion, error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewUpdateSubresourceAction(suggestionsResource, "status", c.ns, suggestion), &v1beta1.Suggestion{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1beta1.Suggestion), err
-}
-
-// Delete takes name of the suggestion and deletes it. Returns an error if one occurs.
-func (c *FakeSuggestions) Delete(ctx context.Context, name string, opts v1.DeleteOptions) error {
-	_, err := c.Fake.
-		Invokes(testing.NewDeleteAction(suggestionsResource, c.ns, name), &v1beta1.Suggestion{})
-
-	return err
-}
-
-// DeleteCollection deletes a collection of objects.
-func (c *FakeSuggestions) DeleteCollection(ctx context.Context, opts v1.DeleteOptions, listOpts v1.ListOptions) error {
-	action := testing.NewDeleteCollectionAction(suggestionsResource, c.ns, listOpts)
-
-	_, err := c.Fake.Invokes(action, &v1beta1.SuggestionList{})
-	return err
-}
-
-// Patch applies the patch and returns the patched suggestion.
-func (c *FakeSuggestions) Patch(ctx context.Context, name string, pt types.PatchType, data []byte, opts v1.PatchOptions, subresources ...string) (result *v1beta1.Suggestion, err error) {
-	obj, err := c.Fake.
-		Invokes(testing.NewPatchSubresourceAction(suggestionsResource, c.ns, name, pt, data, subresources...), &v1beta1.Suggestion{})
-
-	if obj == nil {
-		return nil, err
-	}
-	return obj.(*v1beta1.Suggestion), err
 }

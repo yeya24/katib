@@ -1,7 +1,23 @@
-FROM tensorflow/tensorflow:1.11.0
-RUN pip install rfc3339 grpcio googleapis-common-protos
-ADD . /usr/src/app/github.com/kubeflow/katib
-WORKDIR /usr/src/app/github.com/kubeflow/katib/cmd/metricscollector/v1beta1/tfevent-metricscollector/
-RUN pip install --no-cache-dir -r requirements.txt
-ENV PYTHONPATH /usr/src/app/github.com/kubeflow/katib:/usr/src/app/github.com/kubeflow/katib/pkg/apis/manager/v1beta1/python:/usr/src/app/github.com/kubeflow/katib/pkg/metricscollector/v1beta1/tfevent-metricscollector/:/usr/src/app/github.com/kubeflow/katib/pkg/metricscollector/v1beta1/common/
+FROM python:3.11-slim
+
+ARG TARGETARCH
+ENV TARGET_DIR /opt/katib
+ENV METRICS_COLLECTOR_DIR cmd/metricscollector/v1beta1/tfevent-metricscollector
+ENV PYTHONPATH ${TARGET_DIR}:${TARGET_DIR}/pkg/apis/manager/v1beta1/python:${TARGET_DIR}/pkg/metricscollector/v1beta1/tfevent-metricscollector/::${TARGET_DIR}/pkg/metricscollector/v1beta1/common/
+
+ADD ./pkg/ ${TARGET_DIR}/pkg/
+ADD ./${METRICS_COLLECTOR_DIR}/ ${TARGET_DIR}/${METRICS_COLLECTOR_DIR}/
+
+WORKDIR  ${TARGET_DIR}/${METRICS_COLLECTOR_DIR}
+
+RUN if [ "${TARGETARCH}" = "arm64" ]; then \
+    apt-get -y update && apt-get -y install gfortran libpcre2-dev && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*; \
+    fi
+
+RUN pip install --prefer-binary --no-cache-dir -r requirements.txt
+RUN chgrp -R 0 ${TARGET_DIR} \
+  && chmod -R g+rwX ${TARGET_DIR}
+
 ENTRYPOINT ["python", "main.py"]

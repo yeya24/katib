@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,13 +19,13 @@ limitations under the License.
 package v1beta1
 
 import (
-	"context"
+	context "context"
 	time "time"
 
-	experimentsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/experiments/v1beta1"
+	controllerexperimentsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/experiments/v1beta1"
 	versioned "github.com/kubeflow/katib/pkg/client/controller/clientset/versioned"
 	internalinterfaces "github.com/kubeflow/katib/pkg/client/controller/informers/externalversions/internalinterfaces"
-	v1beta1 "github.com/kubeflow/katib/pkg/client/controller/listers/experiments/v1beta1"
+	experimentsv1beta1 "github.com/kubeflow/katib/pkg/client/controller/listers/experiments/v1beta1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"
@@ -36,7 +36,7 @@ import (
 // Experiments.
 type ExperimentInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() v1beta1.ExperimentLister
+	Lister() experimentsv1beta1.ExperimentLister
 }
 
 type experimentInformer struct {
@@ -62,16 +62,28 @@ func NewFilteredExperimentInformer(client versioned.Interface, namespace string,
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.ExperimentV1beta1().Experiments(namespace).List(context.TODO(), options)
+				return client.ExperimentV1beta1().Experiments(namespace).List(context.Background(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.ExperimentV1beta1().Experiments(namespace).Watch(context.TODO(), options)
+				return client.ExperimentV1beta1().Experiments(namespace).Watch(context.Background(), options)
+			},
+			ListWithContextFunc: func(ctx context.Context, options v1.ListOptions) (runtime.Object, error) {
+				if tweakListOptions != nil {
+					tweakListOptions(&options)
+				}
+				return client.ExperimentV1beta1().Experiments(namespace).List(ctx, options)
+			},
+			WatchFuncWithContext: func(ctx context.Context, options v1.ListOptions) (watch.Interface, error) {
+				if tweakListOptions != nil {
+					tweakListOptions(&options)
+				}
+				return client.ExperimentV1beta1().Experiments(namespace).Watch(ctx, options)
 			},
 		},
-		&experimentsv1beta1.Experiment{},
+		&controllerexperimentsv1beta1.Experiment{},
 		resyncPeriod,
 		indexers,
 	)
@@ -82,9 +94,9 @@ func (f *experimentInformer) defaultInformer(client versioned.Interface, resyncP
 }
 
 func (f *experimentInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&experimentsv1beta1.Experiment{}, f.defaultInformer)
+	return f.factory.InformerFor(&controllerexperimentsv1beta1.Experiment{}, f.defaultInformer)
 }
 
-func (f *experimentInformer) Lister() v1beta1.ExperimentLister {
-	return v1beta1.NewExperimentLister(f.Informer().GetIndexer())
+func (f *experimentInformer) Lister() experimentsv1beta1.ExperimentLister {
+	return experimentsv1beta1.NewExperimentLister(f.Informer().GetIndexer())
 }

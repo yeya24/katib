@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -17,16 +17,13 @@ limitations under the License.
 package mysql
 
 import (
-	crand "crypto/rand"
 	"database/sql"
 	"fmt"
-	"math/big"
-	"math/rand"
 	"os"
 	"time"
 
 	_ "github.com/go-sql-driver/mysql"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 
 	v1beta1 "github.com/kubeflow/katib/pkg/apis/manager/v1beta1"
 	"github.com/kubeflow/katib/pkg/db/v1beta1/common"
@@ -38,9 +35,6 @@ const (
 	//dbNameTmpl   = "root:%s@tcp(%s:%s)/%s?timeout=5s"
 	dbNameTmpl   = "%s:%s@tcp(%s:%s)/%s?timeout=5s"
 	mysqlTimeFmt = "2006-01-02 15:04:05.999999"
-
-	connectInterval = 5 * time.Second
-	connectTimeout  = 60 * time.Second
 )
 
 type dbConn struct {
@@ -62,49 +56,12 @@ func getDbName() string {
 	return fmt.Sprintf(dbNameTmpl, dbUser, dbPass, dbHost, dbPort, dbName)
 }
 
-func openSQLConn(driverName string, dataSourceName string, interval time.Duration,
-	timeout time.Duration) (*sql.DB, error) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-
-	timeoutC := time.After(timeout)
-	for {
-		select {
-		case <-ticker.C:
-			if db, err := sql.Open(driverName, dataSourceName); err == nil {
-				if err = db.Ping(); err == nil {
-					return db, nil
-				}
-				klog.Errorf("Ping to Katib db failed: %v", err)
-			} else {
-				klog.Errorf("Open sql connection failed: %v", err)
-			}
-		case <-timeoutC:
-			return nil, fmt.Errorf("Timeout waiting for DB conn successfully opened.")
-		}
-	}
-}
-
-func NewWithSQLConn(db *sql.DB) (common.KatibDBInterface, error) {
-	d := new(dbConn)
-	d.db = db
-	seed, err := crand.Int(crand.Reader, big.NewInt(1<<63-1))
-	if err != nil {
-		return nil, fmt.Errorf("RNG initialization failed: %v", err)
-	}
-	// We can do the following instead, but it creates a locking issue
-	//d.rng = rand.New(rand.NewSource(seed.Int64()))
-	rand.Seed(seed.Int64())
-
-	return d, nil
-}
-
-func NewDBInterface() (common.KatibDBInterface, error) {
-	db, err := openSQLConn(dbDriver, getDbName(), connectInterval, connectTimeout)
+func NewDBInterface(connectTimeout time.Duration) (common.KatibDBInterface, error) {
+	db, err := common.OpenSQLConn(dbDriver, getDbName(), common.ConnectInterval, connectTimeout)
 	if err != nil {
 		return nil, fmt.Errorf("DB open failed: %v", err)
 	}
-	return NewWithSQLConn(db)
+	return &dbConn{db: db}, nil
 }
 
 func (d *dbConn) RegisterObservationLog(trialName string, observationLog *v1beta1.ObservationLog) error {
@@ -129,8 +86,11 @@ func (d *dbConn) RegisterObservationLog(trialName string, observationLog *v1beta
 	// Prepare the statement
 	stmt, err := d.db.Prepare(sqlQuery)
 	if err != nil {
-		return fmt.Errorf("Pepare SQL statement failed: %v", err)
+		return fmt.Errorf("Prepare SQL statement failed: %v", err)
 	}
+
+	// Close the statement
+	defer stmt.Close()
 
 	// Execute INSERT
 	_, err = stmt.Exec(values...)
@@ -176,6 +136,8 @@ func (d *dbConn) GetObservationLog(trialName string, metricName string, startTim
 	if err != nil {
 		return nil, fmt.Errorf("Failed to get ObservationLogs %v", err)
 	}
+	// Close the rows
+	defer rows.Close()
 	result := &v1beta1.ObservationLog{
 		MetricLogs: []*v1beta1.MetricLog{},
 	}

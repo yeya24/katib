@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	configv1beta1 "github.com/kubeflow/katib/pkg/apis/config/v1beta1"
 	experimentsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/experiments/v1beta1"
 	suggestionsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/suggestions/v1beta1"
 	trialsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/trials/v1beta1"
@@ -62,9 +63,18 @@ func NewClient(options client.Options) (Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	experimentsv1beta1.AddToScheme(scheme.Scheme)
-	trialsv1beta1.AddToScheme(scheme.Scheme)
-	suggestionsv1beta1.AddToScheme(scheme.Scheme)
+	if err = experimentsv1beta1.AddToScheme(scheme.Scheme); err != nil {
+		return nil, err
+	}
+	if err = trialsv1beta1.AddToScheme(scheme.Scheme); err != nil {
+		return nil, err
+	}
+	if err = suggestionsv1beta1.AddToScheme(scheme.Scheme); err != nil {
+		return nil, err
+	}
+	if err = configv1beta1.AddToScheme(scheme.Scheme); err != nil {
+		return nil, err
+	}
 	cl, err := client.New(cfg, options)
 	if err != nil {
 		return nil, err

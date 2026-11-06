@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,10 +19,10 @@ limitations under the License.
 package v1beta1
 
 import (
-	v1beta1 "github.com/kubeflow/katib/pkg/apis/controller/trials/v1beta1"
-	"k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/client-go/tools/cache"
+	trialsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/trials/v1beta1"
+	labels "k8s.io/apimachinery/pkg/labels"
+	listers "k8s.io/client-go/listers"
+	cache "k8s.io/client-go/tools/cache"
 )
 
 // TrialLister helps list Trials.
@@ -30,7 +30,7 @@ import (
 type TrialLister interface {
 	// List lists all Trials in the indexer.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1beta1.Trial, err error)
+	List(selector labels.Selector) (ret []*trialsv1beta1.Trial, err error)
 	// Trials returns an object that can list and get Trials.
 	Trials(namespace string) TrialNamespaceLister
 	TrialListerExpansion
@@ -38,25 +38,17 @@ type TrialLister interface {
 
 // trialLister implements the TrialLister interface.
 type trialLister struct {
-	indexer cache.Indexer
+	listers.ResourceIndexer[*trialsv1beta1.Trial]
 }
 
 // NewTrialLister returns a new TrialLister.
 func NewTrialLister(indexer cache.Indexer) TrialLister {
-	return &trialLister{indexer: indexer}
-}
-
-// List lists all Trials in the indexer.
-func (s *trialLister) List(selector labels.Selector) (ret []*v1beta1.Trial, err error) {
-	err = cache.ListAll(s.indexer, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1beta1.Trial))
-	})
-	return ret, err
+	return &trialLister{listers.New[*trialsv1beta1.Trial](indexer, trialsv1beta1.Resource("trial"))}
 }
 
 // Trials returns an object that can list and get Trials.
 func (s *trialLister) Trials(namespace string) TrialNamespaceLister {
-	return trialNamespaceLister{indexer: s.indexer, namespace: namespace}
+	return trialNamespaceLister{listers.NewNamespaced[*trialsv1beta1.Trial](s.ResourceIndexer, namespace)}
 }
 
 // TrialNamespaceLister helps list and get Trials.
@@ -64,36 +56,15 @@ func (s *trialLister) Trials(namespace string) TrialNamespaceLister {
 type TrialNamespaceLister interface {
 	// List lists all Trials in the indexer for a given namespace.
 	// Objects returned here must be treated as read-only.
-	List(selector labels.Selector) (ret []*v1beta1.Trial, err error)
+	List(selector labels.Selector) (ret []*trialsv1beta1.Trial, err error)
 	// Get retrieves the Trial from the indexer for a given namespace and name.
 	// Objects returned here must be treated as read-only.
-	Get(name string) (*v1beta1.Trial, error)
+	Get(name string) (*trialsv1beta1.Trial, error)
 	TrialNamespaceListerExpansion
 }
 
 // trialNamespaceLister implements the TrialNamespaceLister
 // interface.
 type trialNamespaceLister struct {
-	indexer   cache.Indexer
-	namespace string
-}
-
-// List lists all Trials in the indexer for a given namespace.
-func (s trialNamespaceLister) List(selector labels.Selector) (ret []*v1beta1.Trial, err error) {
-	err = cache.ListAllByNamespace(s.indexer, s.namespace, selector, func(m interface{}) {
-		ret = append(ret, m.(*v1beta1.Trial))
-	})
-	return ret, err
-}
-
-// Get retrieves the Trial from the indexer for a given namespace and name.
-func (s trialNamespaceLister) Get(name string) (*v1beta1.Trial, error) {
-	obj, exists, err := s.indexer.GetByKey(s.namespace + "/" + name)
-	if err != nil {
-		return nil, err
-	}
-	if !exists {
-		return nil, errors.NewNotFound(v1beta1.Resource("trial"), name)
-	}
-	return obj.(*v1beta1.Trial), nil
+	listers.ResourceIndexer[*trialsv1beta1.Trial]
 }

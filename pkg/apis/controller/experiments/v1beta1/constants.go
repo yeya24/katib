@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -21,7 +21,7 @@ const (
 	DefaultTrialParallelCount = 3
 
 	// DefaultResumePolicy is the default value of spec.resumePolicy.
-	DefaultResumePolicy = LongRunning
+	DefaultResumePolicy = NeverResume
 
 	// DefaultJobSuccessCondition is the default value of spec.trialTemplate.successCondition for Job.
 	DefaultJobSuccessCondition = "status.conditions.#(type==\"Complete\")#|#(status==\"True\")#"
@@ -29,14 +29,32 @@ const (
 	// DefaultJobFailureCondition is the default value of spec.trialTemplate.failureCondition for Job.
 	DefaultJobFailureCondition = "status.conditions.#(type==\"Failed\")#|#(status==\"True\")#"
 
-	// DefaultKubeflowJobSuccessCondition is the default value of spec.trialTemplate.successCondition for Kubeflow Job.
+	// DefaultKubeflowJobSuccessCondition is the default value of spec.trialTemplate.successCondition for Kubeflow Training Job.
 	DefaultKubeflowJobSuccessCondition = "status.conditions.#(type==\"Succeeded\")#|#(status==\"True\")#"
 
-	// DefaultKubeflowJobFailureCondition is the default value of spec.trialTemplate.failureCondition for Kubeflow Job.
+	// DefaultKubeflowJobFailureCondition is the default value of spec.trialTemplate.failureCondition for Kubeflow Training Job.
 	DefaultKubeflowJobFailureCondition = "status.conditions.#(type==\"Failed\")#|#(status==\"True\")#"
+
+	// DefaultTrainJobSuccessCondition is the default value of spec.trialTemplate.successCondition for Training Operator Job.
+	DefaultTrainJobSuccessCondition = "status.conditions.#(type==\"Complete\")#|#(status==\"True\")#"
+
+	// DefaultTrainJobFailureCondition is the default value of spec.trialTemplate.failureCondition for Training Operator Job.
+	DefaultTrainJobFailureCondition = "status.conditions.#(type==\"Failed\")#|#(status==\"True\")#"
 )
 
 var (
-	// DefaultKubeflowJobPrimaryPodLabels is the default value of spec.trialTemplate.primaryPodLabels for Kubeflow Job.
-	DefaultKubeflowJobPrimaryPodLabels = map[string]string{"job-role": "master"}
+	// DefaultKubeflowJobPrimaryPodLabels is the default value of spec.trialTemplate.primaryPodLabels for Kubeflow Training Job.
+	DefaultKubeflowJobPrimaryPodLabels = map[string]string{"training.kubeflow.org/job-role": "master"}
+
+	// DefaultKubeflowJobPrimaryPodLabels is the default value of spec.trialTemplate.primaryPodLabels for Training Operator Job.
+	DefaultTrainJobPrimaryPodLabels = map[string]string{"jobset.sigs.k8s.io/replicatedjob-name": "node", "batch.kubernetes.io/job-completion-index": "0"}
+
+	// KubeflowJobKinds is the list of Kubeflow Training Job kinds.
+	KubeflowJobKinds = map[string]bool{
+		"TFJob":      true,
+		"PyTorchJob": true,
+		"XGBoostJob": true,
+		"MPIJob":     true,
+		"TrainJob":   true,
+	}
 )

@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -29,7 +29,7 @@ type FakeTrialV1beta1 struct {
 }
 
 func (c *FakeTrialV1beta1) Trials(namespace string) v1beta1.TrialInterface {
-	return &FakeTrials{c, namespace}
+	return newFakeTrials(c, namespace)
 }
 
 // RESTClient returns a RESTClient that is used to communicate

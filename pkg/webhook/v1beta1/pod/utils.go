@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -18,6 +18,7 @@ package pod
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -31,8 +32,11 @@ import (
 
 	common "github.com/kubeflow/katib/pkg/apis/controller/common/v1beta1"
 	trialsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/trials/v1beta1"
+	"github.com/kubeflow/katib/pkg/controller.v1beta1/consts"
 	mccommon "github.com/kubeflow/katib/pkg/metricscollector/v1beta1/common"
 )
+
+var errPrimaryContainerNotFound = errors.New("unable to find primary container in mutated pod containers")
 
 func isPrimaryPod(podLabels, primaryLabels map[string]string) bool {
 
@@ -48,10 +52,21 @@ func isPrimaryPod(podLabels, primaryLabels map[string]string) bool {
 	return true
 }
 
+func getPrimaryContainerIndex(containers []v1.Container, primaryContainerName string) int {
+	primaryContainerIndex := -1
+	for i, c := range containers {
+		if c.Name == primaryContainerName {
+			primaryContainerIndex = i
+			break
+		}
+	}
+	return primaryContainerIndex
+}
+
 func getRemoteImage(pod *v1.Pod, namespace string, containerIndex int) (crv1.Image, error) {
 	// verify the image name, then download the remote config file
 	c := pod.Spec.Containers[containerIndex]
-	ref, err := name.ParseReference(c.Image, name.WeakValidation)
+	ref, err := name.ParseReference(c.Image, name.StrictValidation)
 	if err != nil {
 		return nil, fmt.Errorf("Failed to parse image %q: %v", c.Image, err)
 	}
@@ -129,7 +144,7 @@ func getMountPath(mc common.MetricsCollectorSpec) (string, common.FileSystemKind
 
 func needWrapWorkerContainer(mc common.MetricsCollectorSpec) bool {
 	mcKind := mc.Collector.Kind
-	for _, kind := range NeedWrapWorkerMetricsCollecterList {
+	for _, kind := range NeedWrapWorkerMetricsCollectorList {
 		if mcKind == kind {
 			return true
 		}
@@ -140,13 +155,7 @@ func needWrapWorkerContainer(mc common.MetricsCollectorSpec) bool {
 func wrapWorkerContainer(trial *trialsv1beta1.Trial, pod *v1.Pod, namespace,
 	metricsFile string, pathKind common.FileSystemKind) error {
 	// Search for primary container.
-	index := -1
-	for i, c := range pod.Spec.Containers {
-		if c.Name == trial.Spec.PrimaryContainerName {
-			index = i
-			break
-		}
-	}
+	index := getPrimaryContainerIndex(pod.Spec.Containers, trial.Spec.PrimaryContainerName)
 	if index >= 0 {
 		command := []string{"sh", "-c"}
 		args, err := getContainerCommand(pod, namespace, index)
@@ -184,8 +193,7 @@ func wrapWorkerContainer(trial *trialsv1beta1.Trial, pod *v1.Pod, namespace,
 		c.Command = command
 		c.Args = []string{argsStr}
 	} else {
-		return fmt.Errorf("Unable to find primary container %v in mutated pod containers %v",
-			trial.Spec.PrimaryContainerName, pod.Spec.Containers)
+		return fmt.Errorf("%w: primary container: %v, mutated pod containers: %v", errPrimaryContainerNotFound, trial.Spec.PrimaryContainerName, pod.Spec.Containers)
 	}
 	return nil
 }
@@ -212,7 +220,14 @@ func getMarkCompletedCommand(metricsFileDir string, pathKind common.FileSystemKi
 	return fmt.Sprintf("echo %s > %s", mccommon.TrainingCompleted, pidFile)
 }
 
-func mutateVolume(pod *v1.Pod, mountPath, sidecarContainerName, primaryContainerName string, pathKind common.FileSystemKind) error {
+func addContainerVolumeMount(c *v1.Container, vm *v1.VolumeMount) {
+	if c.VolumeMounts == nil {
+		c.VolumeMounts = make([]v1.VolumeMount, 0)
+	}
+	c.VolumeMounts = append(c.VolumeMounts, *vm)
+}
+
+func mutateMetricsCollectorVolume(pod *v1.Pod, mountPath, sidecarContainerName, primaryContainerName string, pathKind common.FileSystemKind) error {
 	metricsVol := v1.Volume{
 		Name: common.MetricsVolume,
 		VolumeSource: v1.VolumeSource{
@@ -241,16 +256,58 @@ func mutateVolume(pod *v1.Pod, mountPath, sidecarContainerName, primaryContainer
 	}
 
 	for _, i := range indexList {
-		c := &pod.Spec.Containers[i]
-		if c.VolumeMounts == nil {
-			c.VolumeMounts = make([]v1.VolumeMount, 0)
-		}
-		c.VolumeMounts = append(c.VolumeMounts, vm)
-		pod.Spec.Containers[i] = *c
+		addContainerVolumeMount(&pod.Spec.Containers[i], &vm)
 	}
 	pod.Spec.Volumes = append(pod.Spec.Volumes, metricsVol)
 
 	return nil
+}
+
+func mutatePodMetadata(pod *v1.Pod, trial *trialsv1beta1.Trial) {
+	podLabels := map[string]string{}
+
+	// Get labels from the created pod.
+	if pod.Labels != nil {
+		podLabels = pod.Labels
+	}
+
+	// Get labels from Trial.
+	for k, v := range trial.Labels {
+		podLabels[k] = v
+	}
+
+	// Add Trial name label.
+	podLabels[consts.LabelTrialName] = trial.GetName()
+
+	// Append label to the Pod metadata.
+	pod.Labels = podLabels
+}
+
+func mutatePodEnv(pod *v1.Pod, trial *trialsv1beta1.Trial) error {
+	// Search for the primary container
+	index := getPrimaryContainerIndex(pod.Spec.Containers, trial.Spec.PrimaryContainerName)
+	if index >= 0 {
+		if pod.Spec.Containers[index].Env == nil {
+			pod.Spec.Containers[index].Env = []v1.EnvVar{}
+		}
+
+		// Pass env variable KATIB_TRIAL_NAME to the primary container using fieldPath
+		pod.Spec.Containers[index].Env = append(
+			pod.Spec.Containers[index].Env,
+			v1.EnvVar{
+				Name: consts.EnvTrialName,
+				ValueFrom: &v1.EnvVarSource{
+					FieldRef: &v1.ObjectFieldSelector{
+						FieldPath: fmt.Sprintf("metadata.labels['%s']", consts.LabelTrialName),
+					},
+				},
+			},
+		)
+		return nil
+	} else {
+		return fmt.Errorf("Unable to find primary container %v in mutated pod containers %v",
+			trial.Spec.PrimaryContainerName, pod.Spec.Containers)
+	}
 }
 
 func getSidecarContainerName(cKind common.CollectorKind) string {

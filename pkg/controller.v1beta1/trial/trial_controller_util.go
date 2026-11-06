@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -39,13 +39,13 @@ const (
 )
 
 // UpdateTrialStatusCondition updates Trial status from current deployed Job status
-func (r *ReconcileTrial) UpdateTrialStatusCondition(instance *trialsv1beta1.Trial, deployedJobName string, jobStatus *trialutil.TrialJobStatus) {
+func (r *ReconcileTrial) UpdateTrialStatusCondition(instance *trialsv1beta1.Trial, deployedJobName string, jobStatus *trialutil.TrialJobStatus) error {
 	logger := log.WithValues("Trial", types.NamespacedName{Name: instance.GetName(), Namespace: instance.GetNamespace()})
 
 	timeNow := metav1.Now()
 
 	if jobStatus.Condition == trialutil.JobSucceeded {
-		if isTrialObservationAvailable(instance) && !instance.IsSucceeded() {
+		if instance.IsObservationAvailable() && !instance.IsSucceeded() {
 			if !instance.IsEarlyStopped() {
 				msg := "Trial has succeeded"
 				reason := TrialSucceededReason
@@ -67,10 +67,17 @@ func (r *ReconcileTrial) UpdateTrialStatusCondition(instance *trialsv1beta1.Tria
 				r.collector.IncreaseTrialsSucceededCount(instance.Namespace)
 			}
 		} else if !instance.IsMetricsUnavailable() {
-			// TODO (andreyvelich): Is it correct to mark succeeded status false when metrics are unavailable?
-			// Ref issue to add new condition: https://github.com/kubeflow/katib/issues/1343
 			msg := "Metrics are not available"
 			reason := TrialMetricsUnavailableReason
+
+			// If the type of metrics collector is Push, We should insert an unavailable value to Katib DB.
+			// We would retry reconciliation if some error occurs while we report unavailable metrics.
+			if instance.Spec.MetricsCollector.Collector.Kind == commonv1beta1.PushCollector {
+				if err := r.reportUnavailableMetrics(instance); err != nil {
+					logger.Error(err, "Failed to insert unavailable value to Katib DB")
+					return fmt.Errorf("%w: %w", errReportMetricsFailed, err)
+				}
+			}
 
 			// Get message and reason from deployed job
 			if jobStatus.Message != "" {
@@ -81,10 +88,12 @@ func (r *ReconcileTrial) UpdateTrialStatusCondition(instance *trialsv1beta1.Tria
 			}
 
 			logger.Info("Trial status changed to Metrics Unavailable")
-			instance.MarkTrialStatusSucceeded(corev1.ConditionFalse, reason, msg)
+			instance.MarkTrialStatusMetricsUnavailable(reason, msg)
+			instance.Status.CompletionTime = &timeNow
 
 			eventMsg := fmt.Sprintf("Metrics are not available for Job %v", deployedJobName)
 			r.recorder.Eventf(instance, corev1.EventTypeWarning, JobMetricsUnavailableReason, eventMsg)
+			r.collector.IncreaseTrialsMetricsUnavailableCount(instance.Namespace)
 		}
 	} else if jobStatus.Condition == trialutil.JobFailed && !instance.IsFailed() && !instance.IsEarlyStopped() {
 		msg := "Trial has failed"
@@ -119,7 +128,7 @@ func (r *ReconcileTrial) UpdateTrialStatusCondition(instance *trialsv1beta1.Tria
 		// TODO(gaocegege): Should we maintain a TrialsRunningCount?
 	}
 	// else nothing to do
-	return
+	return nil
 }
 
 func (r *ReconcileTrial) UpdateTrialStatusObservation(instance *trialsv1beta1.Trial) error {
@@ -163,16 +172,21 @@ func (r *ReconcileTrial) updateFinalizers(instance *trialsv1beta1.Trial, finaliz
 	}
 }
 
-func isTrialObservationAvailable(instance *trialsv1beta1.Trial) bool {
-	objectiveMetricName := instance.Spec.Objective.ObjectiveMetricName
-	if instance.Status.Observation != nil && instance.Status.Observation.Metrics != nil {
-		for _, metric := range instance.Status.Observation.Metrics {
-			if metric.Name == objectiveMetricName && metric.Latest != consts.UnavailableMetricValue {
-				return true
-			}
-		}
+func (r *ReconcileTrial) reportUnavailableMetrics(instance *trialsv1beta1.Trial) error {
+	observationLog := &api_pb.ObservationLog{
+		MetricLogs: []*api_pb.MetricLog{
+			{
+				TimeStamp: time.Time{}.UTC().Format(time.RFC3339),
+				Metric: &api_pb.Metric{
+					Name:  instance.Spec.Objective.ObjectiveMetricName,
+					Value: consts.UnavailableMetricValue,
+				},
+			},
+		},
 	}
-	return false
+	_, err := r.ReportTrialObservationLog(instance, observationLog)
+
+	return err
 }
 
 func getMetrics(metricLogs []*api_pb.MetricLog, strategies []commonv1beta1.MetricStrategy) (*commonv1beta1.Observation, error) {
@@ -214,7 +228,7 @@ func getMetrics(metricLogs []*api_pb.MetricLog, strategies []commonv1beta1.Metri
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse timestamps %s: %e", metricLog.TimeStamp, err)
 		}
-		timestamp, _ := timestamps[metricLog.Metric.Name]
+		timestamp := timestamps[metricLog.Metric.Name]
 		if timestamp == nil || !timestamp.After(currentTime) {
 			timestamps[metricLog.Metric.Name] = &currentTime
 			metric.Latest = strValue

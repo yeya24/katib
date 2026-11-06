@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -24,7 +24,7 @@ import (
 	api_v1_beta1 "github.com/kubeflow/katib/pkg/apis/manager/v1beta1"
 	suggestion "github.com/kubeflow/katib/pkg/suggestion/v1beta1/goptuna"
 	"google.golang.org/grpc"
-	"k8s.io/klog"
+	"k8s.io/klog/v2"
 )
 
 const (

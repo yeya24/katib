@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -19,13 +19,13 @@ limitations under the License.
 package v1beta1
 
 import (
-	"context"
+	context "context"
 	time "time"
 
-	suggestionsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/suggestions/v1beta1"
+	controllersuggestionsv1beta1 "github.com/kubeflow/katib/pkg/apis/controller/suggestions/v1beta1"
 	versioned "github.com/kubeflow/katib/pkg/client/controller/clientset/versioned"
 	internalinterfaces "github.com/kubeflow/katib/pkg/client/controller/informers/externalversions/internalinterfaces"
-	v1beta1 "github.com/kubeflow/katib/pkg/client/controller/listers/suggestions/v1beta1"
+	suggestionsv1beta1 "github.com/kubeflow/katib/pkg/client/controller/listers/suggestions/v1beta1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	watch "k8s.io/apimachinery/pkg/watch"
@@ -36,7 +36,7 @@ import (
 // Suggestions.
 type SuggestionInformer interface {
 	Informer() cache.SharedIndexInformer
-	Lister() v1beta1.SuggestionLister
+	Lister() suggestionsv1beta1.SuggestionLister
 }
 
 type suggestionInformer struct {
@@ -62,16 +62,28 @@ func NewFilteredSuggestionInformer(client versioned.Interface, namespace string,
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.SuggestionV1beta1().Suggestions(namespace).List(context.TODO(), options)
+				return client.SuggestionV1beta1().Suggestions(namespace).List(context.Background(), options)
 			},
 			WatchFunc: func(options v1.ListOptions) (watch.Interface, error) {
 				if tweakListOptions != nil {
 					tweakListOptions(&options)
 				}
-				return client.SuggestionV1beta1().Suggestions(namespace).Watch(context.TODO(), options)
+				return client.SuggestionV1beta1().Suggestions(namespace).Watch(context.Background(), options)
+			},
+			ListWithContextFunc: func(ctx context.Context, options v1.ListOptions) (runtime.Object, error) {
+				if tweakListOptions != nil {
+					tweakListOptions(&options)
+				}
+				return client.SuggestionV1beta1().Suggestions(namespace).List(ctx, options)
+			},
+			WatchFuncWithContext: func(ctx context.Context, options v1.ListOptions) (watch.Interface, error) {
+				if tweakListOptions != nil {
+					tweakListOptions(&options)
+				}
+				return client.SuggestionV1beta1().Suggestions(namespace).Watch(ctx, options)
 			},
 		},
-		&suggestionsv1beta1.Suggestion{},
+		&controllersuggestionsv1beta1.Suggestion{},
 		resyncPeriod,
 		indexers,
 	)
@@ -82,9 +94,9 @@ func (f *suggestionInformer) defaultInformer(client versioned.Interface, resyncP
 }
 
 func (f *suggestionInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&suggestionsv1beta1.Suggestion{}, f.defaultInformer)
+	return f.factory.InformerFor(&controllersuggestionsv1beta1.Suggestion{}, f.defaultInformer)
 }
 
-func (f *suggestionInformer) Lister() v1beta1.SuggestionLister {
-	return v1beta1.NewSuggestionLister(f.Informer().GetIndexer())
+func (f *suggestionInformer) Lister() suggestionsv1beta1.SuggestionLister {
+	return suggestionsv1beta1.NewSuggestionLister(f.Informer().GetIndexer())
 }

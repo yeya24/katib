@@ -43,12 +43,10 @@
       "properties": {
         "lastTransitionTime": {
           "description": "Last time the condition transitioned from one status to another.",
-          "default": {},
           "$ref": "#/definitions/v1.Time"
         },
         "lastUpdateTime": {
           "description": "The last time this condition was updated.",
-          "default": {},
           "$ref": "#/definitions/v1.Time"
         },
         "message": {
@@ -102,9 +100,6 @@
     ".v1beta1.SuggestionSpec": {
       "description": "SuggestionSpec is the specification of a Suggestion.",
       "type": "object",
-      "required": [
-        "algorithm"
-      ],
       "properties": {
         "algorithm": {
           "description": "Algorithm describes HP or NAS algorithm that suggestion is used.",
@@ -120,7 +115,7 @@
           "format": "int32"
         },
         "resumePolicy": {
-          "description": "ResumePolicy describes resuming policy which usually take effect after experiment terminated. Default value is LongRunning.",
+          "description": "ResumePolicy describes resuming policy which usually take effect after experiment terminated. Default value is Never.",
           "type": "string"
         }
       }
@@ -135,7 +130,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.AlgorithmSetting"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         },
         "completionTime": {
           "description": "Represents time when the Suggestion was completed. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
@@ -147,7 +146,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/.v1beta1.SuggestionCondition"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "type"
+          ],
+          "x-kubernetes-list-type": "map"
         },
         "lastReconcileTime": {
           "description": "Represents last time when the Suggestion was reconciled. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
@@ -168,7 +171,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/.v1beta1.TrialAssignment"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         }
       }
     },
@@ -208,6 +215,18 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.EarlyStoppingRule"
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
+        },
+        "labels": {
+          "description": "Suggestion label metadata to attach to Trial job",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "default": ""
           }
         },
         "name": {
@@ -220,7 +239,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.ParameterAssignment"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         }
       }
     },
@@ -234,12 +257,10 @@
       "properties": {
         "lastTransitionTime": {
           "description": "Last time the condition transitioned from one status to another.",
-          "default": {},
           "$ref": "#/definitions/v1.Time"
         },
         "lastUpdateTime": {
           "description": "The last time this condition was updated.",
-          "default": {},
           "$ref": "#/definitions/v1.Time"
         },
         "message": {
@@ -293,9 +314,6 @@
     ".v1beta1.TrialSpec": {
       "description": "TrialSpec is the specification of a Trial.",
       "type": "object",
-      "required": [
-        "parameterAssignments"
-      ],
       "properties": {
         "earlyStoppingRules": {
           "description": "Rules for early stopping techniques. Each rule should be met to early stop Trial.",
@@ -303,11 +321,23 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.EarlyStoppingRule"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         },
         "failureCondition": {
           "description": "Condition when trial custom resource is failed. Condition must be in GJSON format, ref https://github.com/tidwall/gjson. For example for BatchJob: status.conditions.#(type==\"Failed\")#|#(status==\"True\")#",
           "type": "string"
+        },
+        "labels": {
+          "description": "Labels that provide additional metadata for services (e.g. Suggestions tracking)",
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "default": ""
+          }
         },
         "metricsCollector": {
           "description": "Describes how metrics will be collected",
@@ -324,7 +354,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.ParameterAssignment"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         },
         "primaryContainerName": {
           "description": "Name of training container where actual model training is running",
@@ -343,7 +377,7 @@
           "type": "boolean"
         },
         "runSpec": {
-          "description": "Raw text for the trial run spec. This can be any generic Kubernetes runtime object. The trial operator should create the resource as written, and let the corresponding resource controller (e.g. tf-operator) handle the rest.",
+          "description": "Raw text for the trial run spec. This can be any generic Kubernetes runtime object. The trial operator should create the resource as written, and let the corresponding resource controller (e.g. Kubeflow Training Operator) handle the rest.",
           "$ref": "#/definitions/v1.unstructured.Unstructured"
         },
         "successCondition": {
@@ -366,7 +400,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/.v1beta1.TrialCondition"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "type"
+          ],
+          "x-kubernetes-list-type": "map"
         },
         "lastReconcileTime": {
           "description": "Represents last time when the Trial was reconciled. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
@@ -410,23 +448,23 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.AlgorithmSetting"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         }
       }
     },
     "v1beta1.CollectorSpec": {
       "type": "object",
-      "required": [
-        "kind"
-      ],
       "properties": {
         "customCollector": {
           "description": "When kind is \"customCollector\", this field will be used",
           "$ref": "#/definitions/v1.Container"
         },
         "kind": {
-          "type": "string",
-          "default": ""
+          "type": "string"
         }
       }
     },
@@ -499,7 +537,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.EarlyStoppingSetting"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         }
       }
     },
@@ -539,12 +581,10 @@
       "properties": {
         "lastTransitionTime": {
           "description": "Last time the condition transitioned from one status to another.",
-          "default": {},
           "$ref": "#/definitions/v1.Time"
         },
         "lastUpdateTime": {
           "description": "The last time this condition was updated.",
-          "default": {},
           "$ref": "#/definitions/v1.Time"
         },
         "message": {
@@ -639,10 +679,14 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.ParameterSpec"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         },
         "resumePolicy": {
-          "description": "Describes resuming policy which usually take effect after experiment terminated.",
+          "description": "Describes resuming policy which usually take effect after experiment terminated. Default value is Never.",
           "type": "string"
         },
         "trialTemplate": {
@@ -665,7 +709,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.ExperimentCondition"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "type"
+          ],
+          "x-kubernetes-list-type": "map"
         },
         "currentOptimalTrial": {
           "description": "Current optimal trial parameters and observations.",
@@ -678,7 +726,8 @@
           "items": {
             "type": "string",
             "default": ""
-          }
+          },
+          "x-kubernetes-list-type": "set"
         },
         "failedTrialList": {
           "description": "List of trial names which have already failed.",
@@ -686,7 +735,8 @@
           "items": {
             "type": "string",
             "default": ""
-          }
+          },
+          "x-kubernetes-list-type": "set"
         },
         "killedTrialList": {
           "description": "List of trial names which have been killed.",
@@ -694,11 +744,21 @@
           "items": {
             "type": "string",
             "default": ""
-          }
+          },
+          "x-kubernetes-list-type": "set"
         },
         "lastReconcileTime": {
           "description": "Represents last time when the Experiment was reconciled. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
           "$ref": "#/definitions/v1.Time"
+        },
+        "metricsUnavailableTrialList": {
+          "description": "List of trial names which have been metrics unavailable",
+          "type": "array",
+          "items": {
+            "type": "string",
+            "default": ""
+          },
+          "x-kubernetes-list-type": "set"
         },
         "pendingTrialList": {
           "description": "List of trial names which are pending.",
@@ -706,7 +766,8 @@
           "items": {
             "type": "string",
             "default": ""
-          }
+          },
+          "x-kubernetes-list-type": "set"
         },
         "runningTrialList": {
           "description": "List of trial names which are running.",
@@ -714,7 +775,8 @@
           "items": {
             "type": "string",
             "default": ""
-          }
+          },
+          "x-kubernetes-list-type": "set"
         },
         "startTime": {
           "description": "Represents time when the Experiment was acknowledged by the Experiment controller. It is not guaranteed to be set in happens-before order across separate operations. It is represented in RFC3339 form and is in UTC.",
@@ -726,7 +788,13 @@
           "items": {
             "type": "string",
             "default": ""
-          }
+          },
+          "x-kubernetes-list-type": "set"
+        },
+        "trialMetricsUnavailable": {
+          "description": "How many trials are currently metrics unavailable.",
+          "type": "integer",
+          "format": "int32"
         },
         "trials": {
           "description": "Trials is the total number of trials owned by the experiment.",
@@ -768,12 +836,16 @@
     "v1beta1.FeasibleSpace": {
       "type": "object",
       "properties": {
+        "distribution": {
+          "type": "string"
+        },
         "list": {
           "type": "array",
           "items": {
             "type": "string",
             "default": ""
-          }
+          },
+          "x-kubernetes-list-type": "set"
         },
         "max": {
           "type": "string"
@@ -789,6 +861,9 @@
     "v1beta1.FileSystemPath": {
       "type": "object",
       "properties": {
+        "format": {
+          "type": "string"
+        },
         "kind": {
           "type": "string"
         },
@@ -806,7 +881,8 @@
           "items": {
             "type": "string",
             "default": ""
-          }
+          },
+          "x-kubernetes-list-type": "set"
         }
       }
     },
@@ -820,7 +896,8 @@
             "type": "integer",
             "format": "int32",
             "default": 0
-          }
+          },
+          "x-kubernetes-list-type": "set"
         },
         "numLayers": {
           "type": "integer",
@@ -832,7 +909,8 @@
             "type": "integer",
             "format": "int32",
             "default": 0
-          }
+          },
+          "x-kubernetes-list-type": "set"
         }
       }
     },
@@ -888,7 +966,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.Operation"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "operationType"
+          ],
+          "x-kubernetes-list-type": "map"
         }
       }
     },
@@ -902,7 +984,8 @@
           "items": {
             "type": "string",
             "default": ""
-          }
+          },
+          "x-kubernetes-list-type": "set"
         },
         "goal": {
           "description": "Goal is the Experiment's objective goal that should be reached. In case of empty goal, Experiment is running until MaxTrialCount = TrialsSucceeded.",
@@ -915,7 +998,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.MetricStrategy"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         },
         "objectiveMetricName": {
           "description": "ObjectiveMetricName represents primary Experiment's metric to optimize.",
@@ -929,9 +1016,6 @@
     },
     "v1beta1.Observation": {
       "type": "object",
-      "required": [
-        "metrics"
-      ],
       "properties": {
         "metrics": {
           "description": "Key-value pairs for metric names and values",
@@ -939,7 +1023,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.Metric"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         }
       }
     },
@@ -955,22 +1043,21 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.ParameterSpec"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         }
       }
     },
     "v1beta1.OptimalTrial": {
       "description": "OptimalTrial is the metrics and assignments of the best trial.",
       "type": "object",
-      "required": [
-        "bestTrialName",
-        "parameterAssignments"
-      ],
       "properties": {
         "bestTrialName": {
           "description": "BestTrialName is the name of the best trial.",
-          "type": "string",
-          "default": ""
+          "type": "string"
         },
         "observation": {
           "description": "Observation for this trial",
@@ -983,7 +1070,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.ParameterAssignment"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         }
       }
     },
@@ -1100,7 +1191,11 @@
           "items": {
             "default": {},
             "$ref": "#/definitions/v1beta1.TrialParameterSpec"
-          }
+          },
+          "x-kubernetes-list-map-keys": [
+            "name"
+          ],
+          "x-kubernetes-list-type": "map"
         },
         "trialSpec": {
           "description": "TrialSpec represents trial template in unstructured format",

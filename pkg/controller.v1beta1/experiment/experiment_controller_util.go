@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -36,7 +36,7 @@ const (
 	updatePrometheusMetrics = "update-prometheus-metrics"
 )
 
-func (r *ReconcileExperiment) createTrialInstance(expInstance *experimentsv1beta1.Experiment, trialAssignment *suggestionsv1beta1.TrialAssignment) error {
+func (r *ReconcileExperiment) getTrialInstance(expInstance *experimentsv1beta1.Experiment, trialAssignment *suggestionsv1beta1.TrialAssignment) (*trialsv1beta1.Trial, error) {
 	logger := log.WithValues("Experiment", types.NamespacedName{Name: expInstance.GetName(), Namespace: expInstance.GetNamespace()})
 
 	trial := &trialsv1beta1.Trial{}
@@ -44,9 +44,15 @@ func (r *ReconcileExperiment) createTrialInstance(expInstance *experimentsv1beta
 	trial.Namespace = expInstance.GetNamespace()
 	trial.Labels = util.TrialLabels(expInstance)
 
+	if trialAssignment.Labels != nil {
+		for k, v := range trialAssignment.Labels {
+			trial.Labels[k] = v
+		}
+	}
+
 	if err := controllerutil.SetControllerReference(expInstance, trial, r.scheme); err != nil {
 		logger.Error(err, "Set controller reference error")
-		return err
+		return nil, err
 	}
 
 	trial.Spec.Objective = expInstance.Spec.Objective
@@ -61,7 +67,7 @@ func (r *ReconcileExperiment) createTrialInstance(expInstance *experimentsv1beta
 	runSpec, err := r.GetRunSpecWithHyperParameters(expInstance, trial.Name, trial.Namespace, hps)
 	if err != nil {
 		logger.Error(err, "Fail to get RunSpec from experiment", expInstance.Name)
-		return err
+		return nil, err
 	}
 
 	trial.Spec.RunSpec = runSpec
@@ -86,12 +92,7 @@ func (r *ReconcileExperiment) createTrialInstance(expInstance *experimentsv1beta
 		trial.Spec.FailureCondition = expInstance.Spec.TrialTemplate.FailureCondition
 	}
 
-	if err := r.Create(context.TODO(), trial); err != nil {
-		logger.Error(err, "Trial create error", "Trial name", trial.Name)
-		return err
-	}
-	return nil
-
+	return trial, nil
 }
 
 func needUpdateFinalizers(exp *experimentsv1beta1.Experiment) (bool, []string) {

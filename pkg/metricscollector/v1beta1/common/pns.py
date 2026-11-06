@@ -1,4 +1,4 @@
-# Copyright 2021 The Kubeflow Authors.
+# Copyright 2022 The Kubeflow Authors.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -13,10 +13,11 @@
 # limitations under the License.
 
 import os
-import psutil
 import sys
 import time
+
 import const
+import psutil
 
 
 def WaitMainProcesses(pool_interval, timout, wait_all, completed_marked_dir):
@@ -24,17 +25,20 @@ def WaitMainProcesses(pool_interval, timout, wait_all, completed_marked_dir):
     Hold metrics collector parser until required pids are finished
     """
 
-    if not sys.platform.startswith('linux'):
+    if not sys.platform.startswith("linux"):
         raise Exception("Platform '{}' unsupported".format(sys.platform))
 
     pids, main_pid = GetMainProcesses(completed_marked_dir)
 
-    return WaitPIDs(pids, main_pid, pool_interval, timout, wait_all, completed_marked_dir)
+    return WaitPIDs(
+        pids, main_pid, pool_interval, timout, wait_all, completed_marked_dir
+    )
 
 
 def GetMainProcesses(completed_marked_dir):
     """
-    Return array with all running processes pids and main process pid which metrics collector is waiting.
+    Return array with all running processes pids
+    and main process pid which metrics collector is waiting.
     """
     pids = set()
     main_pid = 0
@@ -55,13 +59,20 @@ def GetMainProcesses(completed_marked_dir):
         cmd_lind = " ".join(proc.cmdline())
 
         # By default main_pid is the first process.
-        # Command line contains completed marker for the main pid
+        # In addition to that, command line contains completed marker for the main pid.
         # For example: echo completed > /var/log/katib/$$$$.pid
         # completed_marked_dir is the directory for completed marker, e.g. /var/log/katib
-        if main_pid == 0 or ("echo {} > {}".format(const.TRAINING_COMPLETED, completed_marked_dir) in cmd_lind):
+        if main_pid == 0 or (
+            "echo {} > {}".format(const.TRAINING_COMPLETED, completed_marked_dir)
+            in cmd_lind
+        ):
             main_pid = pid
 
         pids.add(pid)
+
+    # If mainPid has not been found, return an error.
+    if main_pid == 0:
+        raise Exception("Unable to find main pid from the process list {}".format(pids))
 
     return pids, main_pid
 
@@ -87,16 +98,25 @@ def WaitPIDs(pids, main_pid, pool_interval, timout, wait_all, completed_marked_d
             path = "/proc/{}".format(pid)
             if not os.path.exists(path):
                 if pid == main_pid:
-                    # For main_pid we check if file with "completed" marker exists if completed_marked_dir is set
+                    # For main_pid we check if file with "completed"
+                    # marker exists if completed_marked_dir is set
                     if completed_marked_dir:
-                        mark_file = os.path.join(completed_marked_dir, "{}.pid".format(pid))
+                        mark_file = os.path.join(
+                            completed_marked_dir, "{}.pid".format(pid)
+                        )
                         # Check if file contains "completed" marker
                         with open(mark_file) as file_obj:
                             contents = file_obj.read()
                             if contents.strip() != const.TRAINING_COMPLETED:
                                 raise Exception(
-                                    "Unable to find marker: {} in file: {} with contents: {} for pid: {}".format(
-                                        const.TRAINING_COMPLETED, mark_file, contents, pid))
+                                    "Unable to find marker: {} in file: {} with contents: {} "
+                                    "for pid: {}".format(
+                                        const.TRAINING_COMPLETED,
+                                        mark_file,
+                                        contents,
+                                        pid,
+                                    )
+                                )
                     # Add main pid to finished pids set
                     finished_pids.add(pid)
                     # Exit loop if wait all is false because main pid is finished

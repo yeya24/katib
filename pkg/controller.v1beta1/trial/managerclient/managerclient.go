@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -28,6 +28,9 @@ type ManagerClient interface {
 		instance *trialsv1beta1.Trial) (*api_pb.GetObservationLogReply, error)
 	DeleteTrialObservationLog(
 		instance *trialsv1beta1.Trial) (*api_pb.DeleteObservationLogReply, error)
+	ReportTrialObservationLog(
+		instance *trialsv1beta1.Trial,
+		observationLogs *api_pb.ObservationLog) (*api_pb.ReportObservationLogReply, error)
 }
 
 // DefaultClient implements the Client interface.
@@ -70,9 +73,7 @@ func (d *DefaultClient) GetTrialObservationLog(
 		if reply.ObservationLog == nil || reply.ObservationLog.MetricLogs == nil {
 			continue
 		}
-		for _, log := range reply.ObservationLog.MetricLogs {
-			metricLogs = append(metricLogs, log)
-		}
+		metricLogs = append(metricLogs, reply.ObservationLog.MetricLogs...)
 	}
 	reply.ObservationLog.MetricLogs = metricLogs
 
@@ -85,6 +86,20 @@ func (d *DefaultClient) DeleteTrialObservationLog(
 		TrialName: instance.Name,
 	}
 	reply, err := common.DeleteObservationLog(request)
+	if err != nil {
+		return nil, err
+	}
+	return reply, nil
+}
+
+func (d *DefaultClient) ReportTrialObservationLog(
+	instance *trialsv1beta1.Trial,
+	observationLog *api_pb.ObservationLog) (*api_pb.ReportObservationLogReply, error) {
+	request := &api_pb.ReportObservationLogRequest{
+		TrialName:      instance.Name,
+		ObservationLog: observationLog,
+	}
+	reply, err := common.ReportObservationLog(request)
 	if err != nil {
 		return nil, err
 	}

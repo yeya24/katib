@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -75,32 +75,35 @@ func add(mgr manager.Manager, r reconcile.Reconciler) error {
 		return err
 	}
 
-	err = c.Watch(&source.Kind{Type: &suggestionsv1beta1.Suggestion{}}, &handler.EnqueueRequestForObject{})
-	if err != nil {
+	if err = c.Watch(source.Kind[*suggestionsv1beta1.Suggestion](
+		mgr.GetCache(), &suggestionsv1beta1.Suggestion{},
+		&handler.TypedEnqueueRequestForObject[*suggestionsv1beta1.Suggestion]{},
+	)); err != nil {
 		return err
 	}
 
-	err = c.Watch(&source.Kind{Type: &appsv1.Deployment{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &suggestionsv1beta1.Suggestion{},
-	})
-	if err != nil {
+	if err = c.Watch(source.Kind[*appsv1.Deployment](
+		mgr.GetCache(), &appsv1.Deployment{},
+		handler.TypedEnqueueRequestForOwner[*appsv1.Deployment](
+			mgr.GetScheme(), mgr.GetRESTMapper(), &suggestionsv1beta1.Suggestion{}, handler.OnlyControllerOwner(),
+		),
+	)); err != nil {
 		return err
 	}
-
-	err = c.Watch(&source.Kind{Type: &corev1.Service{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &suggestionsv1beta1.Suggestion{},
-	})
-	if err != nil {
+	if err = c.Watch(source.Kind[*corev1.Service](
+		mgr.GetCache(), &corev1.Service{},
+		handler.TypedEnqueueRequestForOwner[*corev1.Service](
+			mgr.GetScheme(), mgr.GetRESTMapper(), &suggestionsv1beta1.Suggestion{}, handler.OnlyControllerOwner(),
+		),
+	)); err != nil {
 		return err
 	}
-
-	err = c.Watch(&source.Kind{Type: &corev1.PersistentVolumeClaim{}}, &handler.EnqueueRequestForOwner{
-		IsController: true,
-		OwnerType:    &suggestionsv1beta1.Suggestion{},
-	})
-	if err != nil {
+	if err = c.Watch(source.Kind[*corev1.PersistentVolumeClaim](
+		mgr.GetCache(), &corev1.PersistentVolumeClaim{},
+		handler.TypedEnqueueRequestForOwner[*corev1.PersistentVolumeClaim](
+			mgr.GetScheme(), mgr.GetRESTMapper(), &suggestionsv1beta1.Suggestion{}, handler.OnlyControllerOwner(),
+		),
+	)); err != nil {
 		return err
 	}
 
@@ -223,8 +226,7 @@ func (r *ReconcileSuggestion) ReconcileSuggestion(instance *suggestionsv1beta1.S
 	// If early stopping is used, create RBAC.
 	// If controller should reconcile RBAC,
 	// ServiceAccount name must be equal to <suggestion-name>-<suggestion-algorithm>
-	if instance.Spec.EarlyStopping != nil && instance.Spec.EarlyStopping.AlgorithmName != "" &&
-		deploy.Spec.Template.Spec.ServiceAccountName == util.GetSuggestionRBACName(instance) {
+	if instance.Spec.EarlyStopping != nil && deploy.Spec.Template.Spec.ServiceAccountName == util.GetSuggestionRBACName(instance) {
 
 		serviceAccount, role, roleBinding, err := r.DesiredRBAC(instance)
 		if err != nil {
@@ -241,7 +243,7 @@ func (r *ReconcileSuggestion) ReconcileSuggestion(instance *suggestionsv1beta1.S
 	if foundDeploy, err := r.reconcileDeployment(deploy, suggestionNsName); err != nil {
 		return err
 	} else {
-		if isReady := r.checkDeploymentReady(foundDeploy); isReady != true {
+		if !r.checkDeploymentReady(foundDeploy) {
 			// deployment is not ready yet
 			msg := "Deployment is not ready"
 			instance.MarkSuggestionStatusDeploymentReady(corev1.ConditionFalse, SuggestionDeploymentNotReady, msg)
@@ -274,6 +276,15 @@ func (r *ReconcileSuggestion) ReconcileSuggestion(instance *suggestionsv1beta1.S
 			instance.MarkSuggestionStatusFailed(SuggestionFailedReason, msg)
 			// return nil since it is a terminal condition
 			return nil
+		}
+		if instance.Spec.EarlyStopping != nil {
+			if err = r.ValidateEarlyStoppingSettings(instance, experiment); err != nil {
+				logger.Error(err, "Marking suggestion failed as early stopping settings validation failed")
+				msg := fmt.Sprintf("Validation failed: %v", err)
+				instance.MarkSuggestionStatusFailed(SuggestionFailedReason, msg)
+				// return nil since it is a terminal condition
+				return nil
+			}
 		}
 		msg := "Suggestion is running"
 		instance.MarkSuggestionStatusRunning(corev1.ConditionTrue, SuggestionRunningReason, msg)

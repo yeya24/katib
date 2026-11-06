@@ -1,5 +1,5 @@
 /*
-Copyright 2021 The Kubeflow Authors.
+Copyright 2022 The Kubeflow Authors.
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -23,6 +23,7 @@ import (
 )
 
 // SuggestionLabels returns the expected suggestion labels.
+// SuggestionLabels returns the expected suggestion labels.
 func SuggestionLabels(instance *suggestionsv1beta1.Suggestion) map[string]string {
 	res := make(map[string]string)
 	for k, v := range instance.Labels {
@@ -31,7 +32,7 @@ func SuggestionLabels(instance *suggestionsv1beta1.Suggestion) map[string]string
 	res[consts.LabelDeploymentName] = GetSuggestionDeploymentName(instance)
 	res[consts.LabelExperimentName] = instance.Name
 	res[consts.LabelSuggestionName] = instance.Name
-
+	res[consts.LabelIstioSidecarInjectName] = consts.LabelIstioSidecarInjectValue
 	return res
 }
 
@@ -43,5 +44,15 @@ func TrialLabels(instance *experimentsv1beta1.Experiment) map[string]string {
 	}
 	res[consts.LabelExperimentName] = instance.Name
 
+	return res
+}
+
+// AppendIstioSidecarLabel adds the Istio sidecar injection label to a labels map
+func AppendIstioSidecarLabel(labels map[string]string) map[string]string {
+	res := make(map[string]string)
+	for k, v := range labels {
+		res[k] = v
+	}
+	res[consts.LabelIstioSidecarInjectName] = consts.LabelIstioSidecarInjectValue
 	return res
 }

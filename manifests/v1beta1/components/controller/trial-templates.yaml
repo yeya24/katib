@@ -1,10 +1,11 @@
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: trial-template
+  name: trial-templates
   namespace: kubeflow
   labels:
-    app: katib-trial-templates
+    katib.kubeflow.org/component: trial-templates
 data:
   defaultTrialTemplate.yaml: |-
     apiVersion: batch/v1
@@ -14,14 +15,14 @@ data:
         spec:
           containers:
             - name: training-container
-              image: docker.io/kubeflowkatib/mxnet-mnist:v1beta1-45c5727
+              image: ghcr.io/kubeflow/katib/pytorch-mnist-cpu:latest
               command:
                 - "python3"
-                - "/opt/mxnet-mnist/mnist.py"
-                - "--batch-size=64"
+                - "/opt/pytorch-mnist/mnist.py"
+                - "--epochs=1"
+                - "--batch-size=16"
                 - "--lr=${trialParameters.learningRate}"
-                - "--num-layers=${trialParameters.numberLayers}"
-                - "--optimizer=${trialParameters.optimizer}"
+                - "--momentum=${trialParameters.momentum}"
           restartPolicy: Never
   # For ConfigMap templates double quotes must set in commands to correct parse JSON parameters in Trial Template (e.g nn_config, architecture)
   enasCPUTemplate: |-
@@ -32,7 +33,7 @@ data:
         spec:
           containers:
             - name: training-container
-              image: docker.io/kubeflowkatib/enas-cnn-cifar10-cpu:v1beta1-45c5727
+              image: ghcr.io/kubeflow/katib/enas-cnn-cifar10-cpu:latest
               command:
                 - python3
                 - -u
@@ -42,7 +43,7 @@ data:
                 - "--nn_config=\"${trialParameters.neuralNetworkConfig}\""
           restartPolicy: Never
   pytorchJobTemplate: |-
-    apiVersion: "kubeflow.org/v1"
+    apiVersion: kubeflow.org/v1
     kind: PyTorchJob
     spec:
       pytorchReplicaSpecs:
@@ -53,8 +54,7 @@ data:
             spec:
               containers:
                 - name: pytorch
-                  image: docker.io/kubeflowkatib/pytorch-mnist:v1beta1-45c5727
-                  imagePullPolicy: Always
+                  image: ghcr.io/kubeflow/katib/pytorch-mnist-cpu:latest
                   command:
                     - "python3"
                     - "/opt/pytorch-mnist/mnist.py"
@@ -68,8 +68,7 @@ data:
             spec:
               containers:
                 - name: pytorch
-                  image: docker.io/kubeflowkatib/pytorch-mnist:v1beta1-45c5727
-                  imagePullPolicy: Always
+                  image: ghcr.io/kubeflow/katib/pytorch-mnist-cpu:latest
                   command:
                     - "python3"
                     - "/opt/pytorch-mnist/mnist.py"
